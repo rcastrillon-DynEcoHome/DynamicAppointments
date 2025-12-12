@@ -1,0 +1,481 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background-color: #f3f5f7;
+  color: #16325c;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+
+.c-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1.5rem;
+  background: linear-gradient(90deg, #005fb2, #0176d3);
+  color: #fff;
+}
+/* Ensure right-aligned header actions stay aligned */
+
+.c-header__left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.c-header__title {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.c-header__subtitle {
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
+
+.c-header__actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+.c-header__user {
+  font-size: 0.87rem;
+  opacity: 0.95;
+  font-weight: 500;
+}
+
+.c-header__appointment {
+  font-size: 0.78rem;
+  opacity: 0.85;
+}
+/* Sticky header container (header + banner) */
+.c-header-shell {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+}
+
+/* Optional: subtle shadow under the whole bar */
+.c-header-shell {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
+}
+
+/* Recording status banner */
+.c-recording-banner {
+  padding: 0.35rem 1.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* Hidden by default */
+.c-recording-banner--hidden {
+  display: none;
+}
+
+/* States */
+.c-recording-banner--recording {
+  background-color: #DD0000; /* Red */
+  color: #ffffff;
+}
+
+.c-recording-banner--paused {
+  background-color: #ffcc00; /* yellow */
+  color: #16325c;
+}
+
+.c-recording-banner--ready {
+  background-color: #2e844a; /* green */
+  color: #ffffff;
+}
+
+
+/* Settings button + menu */
+
+.c-icon-button {
+  border: none;
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.c-icon-button:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.c-menu {
+  position: absolute;
+  top: 115%;
+  right: 0;
+  min-width: 180px;
+  background: #fff;
+  color: #16325c;
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  padding: 0.25rem 0;
+  z-index: 1000;
+}
+
+.c-menu--hidden {
+  display: none;
+}
+
+.c-menu__item {
+  width: 100%;
+  padding: 0.5rem 0.9rem;
+  border: none;
+  background: #ffffff;        /* solid white so it stands on the menu */
+  text-align: left;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: #16325c;             /* dark text so it’s visible */
+}
+
+.c-menu__item:hover {
+  background: #f3f3f3;
+}
+
+
+/* Layout */
+
+.c-main {
+  flex: 1;
+  padding: 1.5rem;
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.c-card {
+  background: #fff;
+  border-radius: 0.75rem;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.c-card--primary {
+  border-top: 4px solid #0176d3;
+}
+
+.c-card__title {
+  margin: 0 0 0.5rem 0;
+  font-size: 1rem;
+}
+
+/* Text helpers */
+
+.c-text-muted {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.85rem;
+  color: #54698d;
+}
+
+.c-text-small {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  color: #54698d;
+}
+
+/* Buttons */
+
+.c-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.c-button-row--secondary {
+  margin-top: 0.25rem;
+}
+
+.c-button {
+  border-radius: 999px;
+  border: 1px solid #d8dde6;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  background: #fff;
+  color: #16325c;
+}
+
+.c-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.c-button--brand {
+  background: #0176d3;
+  color: #fff;
+  border-color: #0176d3;
+}
+
+.c-button--brand:hover:not(:disabled) {
+  background: #0160aa;
+}
+
+.c-button--destructive {
+  background: #ba0517;
+  border-color: #ba0517;
+  color: #fff;
+}
+
+.c-button--destructive:hover:not(:disabled) {
+  background: #8e020f;
+}
+
+.c-button--neutral {
+  background: #f4f6f9;
+}
+
+/* List */
+
+.c-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.c-list__item {
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.5rem;
+  background: #f9fafb;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.c-list__meta {
+  font-weight: 500;
+}
+
+.c-list__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+/* Badges */
+
+.c-badge-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem; /* space between badges */
+}
+
+.c-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.c-badge--pending {
+  background: #f3f2f2;
+  color: #514f4d;
+}
+
+.c-badge--uploading {
+  background: #fecd62;
+  color: #5c3b00;
+}
+
+.c-badge--uploaded {
+  background: #2e844a;
+  color: #fff;
+}
+
+.c-badge--failed {
+  background: #ba0517;
+  color: #fff;
+}
+
+/* Transcript badges */
+.c-badge--transcript-ready {
+  background: #2e844a; /* same as uploaded */
+  color: #fff;
+}
+
+.c-badge--transcript-progress {
+  background: #fecd62; /* same as uploading */
+  color: #5c3b00;
+}
+
+.c-badge--transcript-none {
+  background: #f3f2f2; /* same as pending */
+  color: #514f4d;
+}
+
+
+
+/* Error text inside list */
+
+.c-error {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: #ba0517;
+}
+
+/* Bottom bar container: pins player + footer to bottom */
+.c-bottom-shell {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  z-index: 900;
+}
+
+/* Playback bar (sits above footer inside the shell) */
+.c-player {
+  background: #ffffff;
+  border-top: 1px solid #d8dde6;
+  padding: 0.5rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
+}
+
+/* Footer with Online / Offline text at very bottom */
+.c-footer {
+  padding: 0.25rem 1rem 0.5rem;
+  font-size: 0.8rem;
+  text-align: center;
+  color: #54698d;
+  background: #f3f5f7;
+  border-top: 1px solid #d8dde6;
+}
+
+
+.c-player__info {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.c-player__title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #16325c;
+}
+
+.c-player__meta {
+  font-size: 0.75rem;
+  color: #54698d;
+}
+
+.c-player__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.c-player__seek {
+  flex: 1;
+}
+
+.c-player__time {
+  font-size: 0.75rem;
+  color: #54698d;
+  white-space: nowrap;
+}
+
+.c-player__speed {
+  font-size: 0.75rem;
+  min-width: 2.5rem;
+  text-align: center;
+}
+.c-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  align-items: flex-end;
+}
+
+.c-filters__field {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.75rem;
+  color: #54698d;
+}
+
+.c-filters__field input,
+.c-filters__field select {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid #d8dde6;
+  border-radius: 0.25rem;
+}
+
+/***** TABS ****/
+.c-tabs {
+  display: flex;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--border-color, #d0d5dd);
+  margin-bottom: 0.75rem;
+}
+
+.c-tabs__tab {
+  border: none;
+  background: transparent;
+  padding: 0.5rem 0.75rem;
+  font: inherit;
+  color: var(--text-subtle, #444);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.c-tabs__tab--active {
+  color: var(--brand-text, #0176d3);
+  border-bottom-color: var(--brand-text, #0176d3);
+  font-weight: 600;
+}
+/* Appointment display under "New Recording" title */
+.c-appointment-display {
+  font-size: 0.85rem;                 /* slightly larger than normal text */
+  font-weight: 500;
+  color: var(--brand-text, #0176d3);  /* match active tab color */
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
+  padding: 4px 0;
+  text-decoration: none;
+}
+
+/* Optional: nicer hover feedback */
+.c-appointment-display:hover {
+  text-decoration-thickness: 2px;
+  filter: brightness(0.9);
+}

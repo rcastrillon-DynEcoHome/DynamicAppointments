@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Dynamic Eco Home Appointments</string>
+    <string name="title_activity_main">Dynamic Eco Home Appointments</string>
+    <string name="package_name">com.dynamicecohome.appointments</string>
+    <string name="custom_url_scheme">com.dynamicecohome.appointments</string>
+</resources>

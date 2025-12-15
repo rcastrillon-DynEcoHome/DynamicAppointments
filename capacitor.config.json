@@ -1,0 +1,9 @@
+{
+  "appId": "com.dynamicecohome.appointments",
+  "appName": "Dynamic Eco Home Appointments",
+  "webDir": "dist",
+  "server": {
+    "cleartext": true
+  }
+}
+

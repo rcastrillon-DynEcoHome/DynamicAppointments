@@ -13,7 +13,7 @@ function Header({
   return (
     <header className="c-header">
       <div className="c-header__left">
-        <div className="c-header__title">Dynamic Consultations</div>
+        <div className="c-header__title">Dynamic Eco Home Appointments</div>
         <div className="c-header__user" id="userDisplay">
           {userDisplay}
         </div>

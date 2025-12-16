@@ -73,7 +73,7 @@ function NewRecordingPanel({
     const chunks = audioChunksRef.current || [];
     let blob = null;
 
-    // Web: can preview paused state via chunks; Native: we only reliably preview afte
+    // Web: can preview paused state via chunks; Native: we only reliably preview after stop
     if (!useNative && (recorderState === "recording" || recorderState === "paused")) {
       if (!chunks.length) {
         blob = audioBlob || null;

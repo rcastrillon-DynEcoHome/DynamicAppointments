@@ -1,5 +1,5 @@
 {
-  "appId": "com.dynamicecohome.appointments",
+  "appId": "com.dynamicecohome.dynappointments",
   "appName": "Dynamic Eco Home Appointments",
   "webDir": "dist",
   "server": {

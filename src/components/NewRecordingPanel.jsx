@@ -12,7 +12,7 @@ function NewRecordingPanel({
   onSaveRecording,
   onSaved,
   onMarkStart, // optional SF hook
-  onMarkSave, // optional SF hook
+  onAfterSave, // ✅ deep link hook (replaces onMarkSave)
   onPreviewRecording, // required for shared footer player
 }) {
   const [isSupported, setIsSupported] = useState(true);
@@ -542,11 +542,12 @@ function NewRecordingPanel({
       durationSeconds,
     });
 
-    if (onMarkSave && savedRecord) {
+    // ✅ NEW behavior: deep-link back to Field Service (or whatever handler App.jsx provides)
+    if (onAfterSave && savedRecord) {
       try {
-        await onMarkSave(savedRecord);
+        await onAfterSave(savedRecord);
       } catch (e) {
-        console.warn("Failed to queue SF SAVE event", e);
+        console.warn("After-save handler failed", e);
       }
     }
 
@@ -690,4 +691,3 @@ function NewRecordingPanel({
 }
 
 export default NewRecordingPanel;
-

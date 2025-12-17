@@ -10,6 +10,10 @@ import { useAuth } from "./hooks/useAuth.js";
 import { useRecordings } from "./hooks/useRecordings.js";
 import { getPlaybackUrl } from "./lib/apiClient.js";
 import { useSfStatusQueue } from "./hooks/useSfStatusQueue.js";
+import {
+  captureSalesforceReturnUrlFromLocation,
+  returnToFieldService,
+} from "./lib/sfDeepLink.js";
 
 function formatTimeDisplay(seconds) {
   if (!seconds || isNaN(seconds)) return "0:00";
@@ -95,11 +99,14 @@ function App() {
     }
   }, [user]);
 
-  // Read appointmentId from URL on first load
+  // Read appointmentId + optional returnUrl from URL on first load
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const initialAppointmentId = params.get("appointmentId") || "";
     setAppointmentId(initialAppointmentId);
+
+    // Optional: if Salesforce (or a wrapper) passes a return URL, capture it.
+    captureSalesforceReturnUrlFromLocation(window.location.href);
   }, []);
 
   // Online/offline handling
@@ -150,7 +157,6 @@ function App() {
   };
 
   // ==== SETTINGS MENU HELPERS ====
-
   const clearAppCacheAndReload = async () => {
     const confirmed = window.confirm(
       "This will delete locally stored recordings and app cache on this device, then reload the app. Cloud uploads are not affected. Continue?"
@@ -158,23 +164,19 @@ function App() {
     if (!confirmed) return;
 
     try {
-      // Delete IndexedDB used for recordings
       if ("indexedDB" in window) {
         try {
-          // Name must match db.js
           indexedDB.deleteDatabase("fs-voice-recorder");
         } catch (e) {
           console.warn("Error deleting IndexedDB", e);
         }
       }
 
-      // Clear any caches (PWA / Vite / etc.)
       if ("caches" in window) {
         const names = await caches.keys();
         await Promise.all(names.map((name) => caches.delete(name)));
       }
 
-      // Unregister any service workers (for PWA install)
       if ("serviceWorker" in navigator) {
         const regs = await navigator.serviceWorker.getRegistrations();
         await Promise.all(regs.map((reg) => reg.unregister()));
@@ -194,9 +196,9 @@ function App() {
     setStatusText("Syncing recordings and status updates…");
 
     try {
-      await syncUploads?.();       // upload pending/failed
-      await clearUploadedLocals?.(); // clear uploaded from local IDB
-      await syncSfPending();       // push SF events
+      await syncUploads?.();
+      await clearUploadedLocals?.();
+      await syncSfPending();
 
       setStatusText("Sync complete.");
     } catch (e) {
@@ -216,182 +218,115 @@ function App() {
   };
 
   // ==== PLAYER LOGIC ====
-
-  // Whenever audioUrl changes, update the <audio> element and auto-play
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    // Revoke old blob URL if needed
     if (prevUrlRef.current && prevUrlRef.current.startsWith("blob:")) {
-      URL.revokeObjectURL(prevUrlRef.current);
-    }
-    prevUrlRef.current = audioUrl || null;
-
-    audio.src = audioUrl || "";
-    // 🔹 Make sure browser loads metadata so duration is available
-    if (audioUrl) {
       try {
-        audio.load();
-      } catch (e) {
-        console.warn("audio.load() failed", e);
-      }
+        URL.revokeObjectURL(prevUrlRef.current);
+      } catch (_) {}
     }
 
-    setPlayerTimeText("0:00 / 0:00");
-    setPlayerSeek(0);
-    setPlayerIsPlaying(false);
+    if (!audioUrl) {
+      audio.pause?.();
+      audio.removeAttribute("src");
+      audio.load?.();
+      prevUrlRef.current = null;
+      return;
+    }
 
-    if (!audioUrl) return;
+    audio.src = audioUrl;
+    prevUrlRef.current = audioUrl;
 
-    audio
-      .play()
-      .then(() => {
-        setPlayerIsPlaying(true);
-      })
-      .catch(() => {
-        setPlayerIsPlaying(false);
-      });
+    audio.playbackRate = playerSpeed;
+    audio.play().catch(() => {});
+
+    setPlayerIsPlaying(true);
   }, [audioUrl]);
 
-  // Attach timeupdate/loadedmetadata/ended handlers
-  // 🔹 Depend on audioUrl so this runs once the <audio> ref is definitely mounted
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const handleTimeUpdate = () => {
-      const current = audio.currentTime || 0;
-      const total = audio.duration || 0;
-      const currentStr = formatTimeDisplay(current);
-      const totalStr = formatTimeDisplay(total);
-      setPlayerTimeText(`${currentStr} / ${totalStr}`);
-
-      if (total > 0) {
-        setPlayerSeek((current / total) * 100);
-      } else {
-        setPlayerSeek(0);
-      }
-    };
-
-    const handleLoadedMetadata = () => {
-      handleTimeUpdate();
-    };
-
-    const handleEnded = () => {
-      setPlayerIsPlaying(false);
-      setPlayerSeek(100);
-    };
-
-    audio.addEventListener("timeupdate", handleTimeUpdate);
-    audio.addEventListener("loadedmetadata", handleLoadedMetadata);
-    audio.addEventListener("ended", handleEnded);
-
-    return () => {
-      audio.removeEventListener("timeupdate", handleTimeUpdate);
-      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
-      audio.removeEventListener("ended", handleEnded);
-    };
-  }, [audioUrl]);
-
-  // Speed changes -> apply to audio element
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
     audio.playbackRate = playerSpeed;
   }, [playerSpeed]);
 
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    function onTimeUpdate() {
+      const cur = audio.currentTime || 0;
+      const dur = audio.duration || 0;
+      const pct = dur > 0 ? Math.min(100, Math.max(0, (cur / dur) * 100)) : 0;
+      setPlayerSeek(pct);
+      setPlayerTimeText(`${formatTimeDisplay(cur)} / ${formatTimeDisplay(dur)}`);
+    }
+
+    function onEnded() {
+      setPlayerIsPlaying(false);
+    }
+
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    audio.addEventListener("ended", onEnded);
+    return () => {
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      audio.removeEventListener("ended", onEnded);
+    };
+  }, []);
+
   const handlePlayerPlayPause = () => {
     const audio = audioRef.current;
-    if (!audio || !audio.src) return;
+    if (!audio) return;
 
     if (audio.paused) {
-      audio
-        .play()
-        .then(() => setPlayerIsPlaying(true))
-        .catch((err) => {
-          console.error("Playback error", err);
-          setStatusText("Unable to play this audio on this device.");
-        });
+      audio.play().catch(() => {});
+      setPlayerIsPlaying(true);
     } else {
       audio.pause();
       setPlayerIsPlaying(false);
     }
   };
 
-  const handlePlayerSeek = (value) => {
+  const handlePlayerSeek = (pct) => {
     const audio = audioRef.current;
-    if (!audio || !audio.duration || isNaN(audio.duration)) return;
-    const pct = Number(value) / 100;
-    audio.currentTime = audio.duration * pct;
-    setPlayerSeek(pct * 100);
+    if (!audio || !audio.duration) return;
+    const newTime = (Math.max(0, Math.min(100, pct)) / 100) * audio.duration;
+    audio.currentTime = newTime;
   };
 
-  const handlePlayerSpeedDown = () => {
-    setPlayerSpeed((prev) => Math.max(0.25, prev - 0.25));
-  };
+  const handlePlayerSpeedDown = () => setPlayerSpeed((s) => Math.max(0.5, +(s - 0.1).toFixed(2)));
+  const handlePlayerSpeedUp = () => setPlayerSpeed((s) => Math.min(3.0, +(s + 0.1).toFixed(2)));
 
-  const handlePlayerSpeedUp = () => {
-    setPlayerSpeed((prev) => Math.min(3.0, prev + 0.25));
-  };
-
-  // When a row is clicked in My Recordings
-  const handleSelectRecording = async (record) => {
-    setSelectedRecording(record);
+  const handleSelectRecording = async (rec) => {
+    setSelectedRecording(rec);
     setPlayerVisible(true);
 
-    setPlayerTitle(record.appointmentId || "(no appointment)");
-
-    const dateStr = new Date(record.createdAt).toLocaleString();
-    let durationStr = "";
-    if (
-      typeof record.durationSeconds === "number" &&
-      !isNaN(record.durationSeconds)
-    ) {
-      const mins = Math.floor(record.durationSeconds / 60);
-      const secs = Math.round(record.durationSeconds % 60)
-        .toString()
-        .padStart(2, "0");
-      durationStr = ` • ${mins}:${secs} min`;
-    }
-    const cloudLabel = record.source === "cloud" ? " — Cloud recording" : "";
-    setPlayerMeta(`${dateStr}${durationStr}${cloudLabel}`);
+    const dateStr = new Date(rec.createdAt).toLocaleString();
+    setPlayerTitle(rec.appointmentId || "(no appointment)");
+    setPlayerMeta(`${dateStr} — ${rec.status || "unknown"}`);
 
     try {
-      if (record.source === "local" && record.local?.blob) {
-        const url = URL.createObjectURL(record.local.blob);
+      if (rec.source === "cloud" && rec.s3Key) {
+        const url = await getPlaybackUrl({ idToken, s3Key: rec.s3Key });
         setAudioUrl(url);
-        setStatusText("Playing local recording.");
-      } else if (
-        record.source === "cloud" &&
-        record.cloud?.s3Key &&
-        idToken
-      ) {
-        setStatusText("Fetching audio from cloud…");
-        const data = await getPlaybackUrl(idToken, {
-          s3Key: record.cloud.s3Key,
-        });
-        if (!data.playbackUrl) {
-          throw new Error("No playbackUrl returned");
-        }
-        setAudioUrl(data.playbackUrl);
-        setStatusText("Playing cloud recording.");
+      } else if (rec.source === "local" && rec.blob) {
+        const url = URL.createObjectURL(rec.blob);
+        setAudioUrl(url);
       } else {
-        setStatusText("Unable to play this recording (missing data).");
+        setStatusText("Unable to play: missing audio source.");
       }
-    } catch (err) {
-      console.error("Cloud playback error", err);
-      setStatusText("Unable to play cloud recording: " + err.message);
+    } catch (e) {
+      console.error("Playback URL error", e);
+      setStatusText("Unable to start playback: " + e.message);
     }
   };
 
-  const handlePreviewRecording = (item) => {
-    // item: { blob, appointmentId, createdAt }
-    setSelectedRecording(null); // just a preview, not a stored record
+  const handlePreviewRecording = async (item) => {
+    setSelectedRecording(null);
     setPlayerVisible(true);
 
     const dateStr = new Date(item.createdAt).toLocaleString();
-
     setPlayerTitle(item.appointmentId || "(no appointment)");
     setPlayerMeta(`${dateStr} — Preview (not yet saved)`);
 
@@ -401,11 +336,9 @@ function App() {
     setStatusText("Previewing current recording (not yet saved).");
   };
 
-  // Player speed text
   const playerSpeedText = `${playerSpeed.toFixed(2).replace(/\.00$/, "")}x`;
 
   // ==== SALESFORCE STATUS HELPERS ====
-
   const handleMarkStartInSalesforce = async () => {
     if (!appointmentId) return;
     try {
@@ -420,18 +353,18 @@ function App() {
     }
   };
 
-  const handleMarkSaveInSalesforce = async (savedRecord) => {
+  // On save, deep-link the user back into Field Service (instead of status update).
+  const handleReturnToFieldService = async (savedRecord) => {
     const apptId = savedRecord?.appointmentId || appointmentId;
     if (!apptId) return;
+
     try {
-      await queueSfEvent({
-        appointmentId: apptId,
-        eventType: "SAVE",
-        statusValue: "Completed",
-        occurredAt: savedRecord?.createdAt || new Date().toISOString(),
-      });
+      await returnToFieldService({ appointmentId: apptId });
     } catch (e) {
-      console.warn("Failed to queue SF SAVE event", e);
+      console.warn("Failed to deep-link back to Field Service", e);
+      setStatusText(
+        "Saved, but couldn't open Field Service automatically. Please switch back to Field Service manually."
+      );
     }
   };
 
@@ -471,7 +404,6 @@ function App() {
       <main className="c-main">
         <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
 
-        {/* Keep both panels mounted; hide inactive one to avoid killing MediaRecorder */}
         <NewRecordingPanel
           isActive={activeTab === "new"}
           appointmentDisplayText={appointmentDisplayText}
@@ -483,7 +415,7 @@ function App() {
           onSaveRecording={saveNewLocalRecording}
           onSaved={() => setActiveTab("list")}
           onMarkStart={handleMarkStartInSalesforce}
-          onMarkSave={handleMarkSaveInSalesforce}
+          onAfterSave={handleReturnToFieldService}
           onPreviewRecording={handlePreviewRecording}
         />
 

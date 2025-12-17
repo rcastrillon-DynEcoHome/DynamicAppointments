@@ -79,7 +79,7 @@ export async function listRecordings(idToken, params = {}) {
 // src/lib/apiClient.js (add at bottom)
 
 export async function sendStatusEvent(idToken, event) {
-  const res = await fetch(`${API_BASE}/sfStatusEvent`, {
+  const res = await fetch(`${API_BASE}/sfStatusEvents`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

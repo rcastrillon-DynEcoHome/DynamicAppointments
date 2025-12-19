@@ -14,20 +14,23 @@ function AudioPlayer({
   onSpeedDown,
   onSpeedUp,
   audioRef,
+  src,
+
+  // ✅ NEW: audio event handlers
+  onLoadedMetadata,
+  onTimeUpdate,
+  onDurationChange,
+  onEnded,
+  onPlay,
+  onPause,
 }) {
-  if (!visible) {
-    return null;
-  }
+  if (!visible) return null;
 
   return (
     <section id="player" className="c-player">
       <div className="c-player__info">
-        <div id="playerTitle" className="c-player__title">
-          {title}
-        </div>
-        <div id="playerMeta" className="c-player__meta">
-          {meta}
-        </div>
+        <div id="playerTitle" className="c-player__title">{title}</div>
+        <div id="playerMeta" className="c-player__meta">{meta}</div>
       </div>
 
       <div className="c-player__controls">
@@ -50,35 +53,34 @@ function AudioPlayer({
           className="c-player__seek"
         />
 
-        <span id="playerTime" className="c-player__time">
-          {timeText}
-        </span>
+        <span id="playerTime" className="c-player__time">{timeText}</span>
 
         <div className="c-player__speed">
-          <button
-            id="playerSpeedDown"
-            className="c-button c-button--neutral"
-            type="button"
-            onClick={onSpeedDown}
-          >
+          <button className="c-button c-button--neutral" type="button" onClick={onSpeedDown}>
             -
           </button>
-          <span id="playerSpeed" className="c-player__speed-label">
-            {speedText}
-          </span>
-          <button
-            id="playerSpeedUp"
-            className="c-button c-button--neutral"
-            type="button"
-            onClick={onSpeedUp}
-          >
+          <span id="playerSpeed" className="c-player__speed-label">{speedText}</span>
+          <button className="c-button c-button--neutral" type="button" onClick={onSpeedUp}>
             +
           </button>
         </div>
       </div>
 
-      {/* Hidden audio element that the player controls */}
-      <audio id="playerAudio" ref={audioRef} />
+      <audio
+        key={src || "empty"}        // keep remount behavior
+        id="playerAudio"
+        ref={audioRef}
+        src={src || ""}
+        preload="metadata"
+        playsInline
+        crossOrigin="anonymous"
+        onLoadedMetadata={onLoadedMetadata}
+        onTimeUpdate={onTimeUpdate}
+        onDurationChange={onDurationChange}
+        onEnded={onEnded}
+        onPlay={onPlay}
+        onPause={onPause}
+      />
     </section>
   );
 }

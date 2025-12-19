@@ -25,7 +25,9 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.75rem 1.5rem;
+
+  padding: 0.55rem 1.5rem;
+
   background: linear-gradient(90deg, #005fb2, #0176d3);
   color: #fff;
 }
@@ -63,14 +65,17 @@ body {
   opacity: 0.85;
 }
 /* Sticky header container (header + banner) */
+/* Sticky header container (header + banner) */
 .c-header-shell {
   position: sticky;
   top: 0;
   z-index: 1000;
-}
 
-/* Optional: subtle shadow under the whole bar */
-.c-header-shell {
+  /* iOS notch/status bar spacing (apply ONCE on the shell) */
+  padding-top: constant(safe-area-inset-top);
+  padding-top: env(safe-area-inset-top);
+
+  background: linear-gradient(90deg, #005fb2, #0176d3);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
 }
 

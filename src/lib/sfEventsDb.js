@@ -4,6 +4,51 @@ const DB_NAME = "fs-sf-events";
 const DB_VERSION = 1;
 const STORE_NAME = "sfEvents";
 
+// --- UUID helper (iOS WKWebView-safe) ---
+function safeRandomUUID() {
+  try {
+    const c = globalThis?.crypto;
+
+    // Newer browsers
+    if (c && typeof c.randomUUID === "function") {
+      return c.randomUUID();
+    }
+
+    // RFC4122 v4 fallback using getRandomValues
+    if (c && typeof c.getRandomValues === "function") {
+      const buf = new Uint8Array(16);
+      c.getRandomValues(buf);
+
+      // RFC4122 version 4
+      buf[6] = (buf[6] & 0x0f) | 0x40;
+      buf[8] = (buf[8] & 0x3f) | 0x80;
+
+      const hex = Array.from(buf, (b) => b.toString(16).padStart(2, "0"));
+      return (
+        hex.slice(0, 4).join("") +
+        "-" +
+        hex.slice(4, 6).join("") +
+        "-" +
+        hex.slice(6, 8).join("") +
+        "-" +
+        hex.slice(8, 10).join("") +
+        "-" +
+        hex.slice(10, 16).join("")
+      );
+    }
+  } catch {}
+
+  // Last resort (not cryptographically strong, but stable enough for local IDs)
+  return (
+    "id-" +
+    Date.now().toString(36) +
+    "-" +
+    Math.random().toString(36).slice(2) +
+    "-" +
+    Math.random().toString(36).slice(2)
+  );
+}
+
 // --- Internal: open DB and ensure store exists ---
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -95,12 +140,7 @@ async function withStore(mode, fn) {
 export async function queueSfEvent(event) {
   // event: { appointmentId, eventType, statusValue, occurredAt, ... }
 
-  const rng = (typeof self !== "undefined" && self.crypto?.randomUUID)
-    || (typeof window !== "undefined" && window.crypto?.randomUUID);
-
-  const id = rng
-    ? rng()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const id = safeRandomUUID();
 
   const record = {
     id,
@@ -124,9 +164,7 @@ export async function getPendingSfEvents() {
       request.onsuccess = () => {
         const results = request.result || [];
         // Sort oldest → newest for nicer processing order
-        results.sort(
-          (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
-        );
+        results.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
         resolve(results);
       };
       request.onerror = () =>
@@ -160,4 +198,3 @@ export async function clearAllSfEvents() {
     store.clear();
   });
 }
-

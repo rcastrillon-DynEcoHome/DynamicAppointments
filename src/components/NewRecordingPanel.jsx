@@ -182,7 +182,7 @@ function NewRecordingPanel({
 
           onStatusChange?.("Recording ready. Tap 'Save recording' to keep it.");
           setSaveDisabled(false);
-          setStartDisabled(false);
+          setStartDisabled(true);
           setPauseDisabled(true);
           setResumeDisabled(true);
           setStopDisabled(true);
@@ -425,7 +425,7 @@ function NewRecordingPanel({
 
         onStatusChange?.("Recording ready. Tap 'Save recording' to keep it.");
         setSaveDisabled(false);
-        setStartDisabled(false);
+        setStartDisabled(true);
         setScrapDisabled(false);
         setPreviewDisabled(false);
         onBannerChange?.("ready");

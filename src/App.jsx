@@ -519,7 +519,7 @@ function App() {
       await queueSfEvent({
         appointmentId,
         eventType: "START",
-        statusValue: "Arrived/In Progress",
+        statusValue: "Arrived / In Progress",
         occurredAt: new Date().toISOString(),
       });
 

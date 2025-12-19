@@ -19,6 +19,34 @@ const WEB_REDIRECT_URI = window.location.origin + "/";
 const TOKEN_KEY = "fsr_id_token";
 const USER_INFO_KEY = "fsr_user_info";
 
+// ---- AUTH DEBUG BUFFER (helps when iOS fails before Safari inspector attaches) ----
+const AUTH_DEBUG_KEY = "fsr_auth_debug_log";
+function _appendAuthDebug(entry) {
+  try {
+    const line = `[${new Date().toISOString()}] ${entry}`;
+    const existing = localStorage.getItem(AUTH_DEBUG_KEY);
+    const lines = existing ? existing.split("\n") : [];
+    lines.push(line);
+    // keep last 200 lines
+    const trimmed = lines.slice(-200);
+    localStorage.setItem(AUTH_DEBUG_KEY, trimmed.join("\n"));
+  } catch {}
+}
+
+function getAuthDebugLog() {
+  try {
+    return localStorage.getItem(AUTH_DEBUG_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function clearAuthDebugLog() {
+  try {
+    localStorage.removeItem(AUTH_DEBUG_KEY);
+  } catch {}
+}
+
 function getRedirectUri() {
   return Capacitor.isNativePlatform() ? NATIVE_REDIRECT_URI : WEB_REDIRECT_URI;
 }
@@ -66,17 +94,42 @@ function buildAuthorizeUrl({ identityProvider } = {}) {
   return url;
 }
 
-// ✅ Dynamic native-only imports so web builds stay clean/safe
+// ✅ Return a NON-thenable wrapper so `await` doesn't trigger CapacitorPlugin.then()
 async function getCapBrowser() {
   if (!Capacitor.isNativePlatform()) return null;
-  const mod = await import("@capacitor/browser");
-  return mod.Browser;
+  try {
+    const mod = await import("@capacitor/browser");
+    const Browser = mod.Browser;
+    if (!Browser) return null;
+
+    return {
+      open: (opts) => Browser.open(opts),
+      close: () => Browser.close(),
+    };
+  } catch (e) {
+    console.error("[auth] Failed to load @capacitor/browser", e);
+    _appendAuthDebug(`Failed to load @capacitor/browser: ${e?.message || String(e)}`);
+    return null;
+  }
 }
 
+// ✅ Return a NON-thenable wrapper so `await` doesn't trigger CapacitorPlugin.then()
 async function getCapApp() {
   if (!Capacitor.isNativePlatform()) return null;
-  const mod = await import("@capacitor/app");
-  return mod.App;
+  try {
+    const mod = await import("@capacitor/app");
+    const App = mod.App;
+    if (!App) return null;
+
+    return {
+      getLaunchUrl: () => App.getLaunchUrl(),
+      addListener: (eventName, cb) => App.addListener(eventName, cb),
+    };
+  } catch (e) {
+    console.error("[auth] Failed to load @capacitor/app", e);
+    _appendAuthDebug(`Failed to load @capacitor/app: ${e?.message || String(e)}`);
+    return null;
+  }
 }
 
 export function useAuth() {
@@ -87,11 +140,49 @@ export function useAuth() {
   const handledAuthRef = useRef(false);
   const isLoggingOutRef = useRef(false);
 
+  const [lastAuthError, setLastAuthError] = useState("");
+
+  // If you launch with ?debugAuth=1 we will NOT auto-open Hosted UI.
+  // This gives you time to attach Safari Web Inspector and view logs.
+  const debugAuth = (() => {
+    try {
+      return new URLSearchParams(window.location.search).get("debugAuth") === "1";
+    } catch {
+      return false;
+    }
+  })();
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    // Capture early fatal errors into the debug buffer
+    const onErr = (msg, src, line, col, err) => {
+      _appendAuthDebug(`window.onerror: ${msg} @${src}:${line}:${col} ${(err?.message || "").trim()}`);
+      setLastAuthError(String(msg || ""));
+      // don't prevent default
+      return false;
+    };
+
+    const onRej = (ev) => {
+      _appendAuthDebug(`unhandledrejection: ${ev?.reason?.message || String(ev?.reason)}`);
+      setLastAuthError(String(ev?.reason?.message || ev?.reason || ""));
+    };
+
+    window.addEventListener("error", onErr);
+    window.addEventListener("unhandledrejection", onRej);
+
+    return () => {
+      window.removeEventListener("error", onErr);
+      window.removeEventListener("unhandledrejection", onRej);
+    };
+  }, []);
+
   const clearAuthState = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_INFO_KEY);
     setIdToken(null);
     setUser(null);
+    setLastAuthError("");
     setLoading(false);
   }, []);
 
@@ -106,6 +197,7 @@ export function useAuth() {
 
     setIdToken(token);
     setUser(claims);
+    setLastAuthError("");
     setLoading(false);
   }, []);
 
@@ -143,7 +235,13 @@ export function useAuth() {
 
     if (Capacitor.isNativePlatform()) {
       const Browser = await getCapBrowser();
-      await Browser?.open?.({ url: loginUrl });
+      if (!Browser?.open) {
+        console.error("[auth] Browser plugin not available on native. Did you run: npx cap sync ios/android and rebuild?");
+        setLoading(false);
+        return;
+      }
+      _appendAuthDebug(`login(): opening Hosted UI. mode=${mode || ""}`);
+      await Browser.open({ url: loginUrl });
       return;
     }
 
@@ -179,11 +277,32 @@ export function useAuth() {
           : buildAuthorizeUrl();
 
       if (Capacitor.isNativePlatform()) {
+        _appendAuthDebug(`ensureAuthenticated(): native start. authMode=${authMode || ""} debugAuth=${debugAuth}`);
+
+        if (debugAuth) {
+          _appendAuthDebug("debugAuth=1 set; skipping auto Browser.open so you can attach inspector.");
+          setLoading(false);
+          return;
+        }
+
         const Browser = await getCapBrowser();
         const CapApp = await getCapApp();
 
+        if (!CapApp?.addListener || !CapApp?.getLaunchUrl) {
+          console.error("[auth] App plugin not available on native. Did you run: npx cap sync ios/android and rebuild?");
+          setLoading(false);
+          return;
+        }
+
+        if (!Browser?.open) {
+          console.error("[auth] Browser plugin not available on native. Did you run: npx cap sync ios/android and rebuild?");
+          setLoading(false);
+          return;
+        }
+
         const handleAuthUrl = async (url) => {
           console.log("[auth] received app url:", url);
+          _appendAuthDebug(`handleAuthUrl(): ${url}`);
           if (!url) return;
           if (!url.startsWith(NATIVE_REDIRECT_URI)) return;
 
@@ -196,7 +315,7 @@ export function useAuth() {
             isLoggingOutRef.current = false;
 
             try {
-              await Browser?.close?.();
+              await Browser.close();
             } catch {}
 
             applyToken(cb.id_token);
@@ -205,7 +324,7 @@ export function useAuth() {
 
           // LOGOUT callback (redirect back without hash) OR cancelled login
           try {
-            await Browser?.close?.();
+            await Browser.close();
           } catch {}
 
           clearAuthState();
@@ -215,7 +334,7 @@ export function useAuth() {
 
         // cold start
         try {
-          const launch = await CapApp?.getLaunchUrl?.();
+          const launch = await CapApp.getLaunchUrl();
           if (launch?.url) {
             await handleAuthUrl(launch.url);
             if (handledAuthRef.current || isLoggingOutRef.current) return;
@@ -223,11 +342,11 @@ export function useAuth() {
         } catch {}
 
         // warm start
-        sub = CapApp?.addListener?.("appUrlOpen", async (event) => {
+        sub = CapApp.addListener("appUrlOpen", async (event) => {
           await handleAuthUrl(event?.url || "");
         });
 
-        await Browser?.open?.({ url: loginUrl });
+        await Browser.open({ url: loginUrl });
         return;
       }
 
@@ -237,6 +356,8 @@ export function useAuth() {
 
     ensureAuthenticated().catch((e) => {
       console.error("Auth guard error", e);
+      _appendAuthDebug(`Auth guard error: ${e?.message || String(e)}`);
+      setLastAuthError(e?.message || String(e));
       setLoading(false);
     });
 
@@ -286,7 +407,11 @@ export function useAuth() {
 
     if (Capacitor.isNativePlatform()) {
       const Browser = await getCapBrowser();
-      await Browser?.open?.({ url: logoutUrl });
+      if (!Browser?.open) {
+        console.error("[auth] Browser plugin not available on native. Did you run: npx cap sync ios/android and rebuild?");
+        return;
+      }
+      await Browser.open({ url: logoutUrl });
       return;
     }
 
@@ -326,5 +451,8 @@ export function useAuth() {
     isAuthenticated: computedIsAuthenticated,
     login,
     logout,
+    lastAuthError,
+    authDebugLog: getAuthDebugLog(),
+    clearAuthDebugLog,
   };
 }

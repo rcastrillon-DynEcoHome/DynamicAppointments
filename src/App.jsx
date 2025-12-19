@@ -27,7 +27,6 @@ function formatTimeDisplay(seconds) {
 // Extract appointmentId from links like:
 // - https://host/record?appointmentId=TEST123
 // - capacitor://localhost/record?appointmentId=TEST123
-// (We also gracefully handle cases where the query string is embedded after a # fragment.)
 function extractAppointmentIdFromUrl(urlString) {
   if (!urlString) return "";
 
@@ -42,7 +41,6 @@ function extractAppointmentIdFromUrl(urlString) {
       const params = new URLSearchParams(hash.slice(qIndex + 1));
       return params.get("appointmentId") || "";
     }
-
     return "";
   } catch {
     const qIndex = urlString.indexOf("?");
@@ -67,6 +65,7 @@ function SignInRedirect({ statusText, onLogin, disableAutoLogin = false }) {
   return (
     <div className="c-main">
       <p>Redirecting to sign-in…</p>
+
       {disableAutoLogin ? (
         <button
           className="c-btn c-btn-primary"
@@ -76,6 +75,7 @@ function SignInRedirect({ statusText, onLogin, disableAutoLogin = false }) {
           Sign in
         </button>
       ) : null}
+
       {statusText ? <p style={{ opacity: 0.8 }}>{statusText}</p> : null}
     </div>
   );
@@ -83,7 +83,8 @@ function SignInRedirect({ statusText, onLogin, disableAutoLogin = false }) {
 
 function App() {
   // ==== AUTH ====
-  const { user, loading, isAuthenticated, login, logout, idToken } = useAuth();
+  const { user, loading, isAuthenticated, login, logout, idToken, isLoggingOut } =
+    useAuth();
 
   // ==== RECORDINGS (local + cloud) ====
   const {
@@ -119,18 +120,18 @@ function App() {
   // Active tab: "new" | "list"
   const [activeTab, setActiveTab] = useState("new");
 
-  // Status text under "New Recording"
+  // Status text
   const [statusText, setStatusText] = useState("");
 
-  // Network status in footer
+  // Network status
   const [networkStatus, setNetworkStatus] = useState(
     navigator.onLine ? "Online" : "Offline"
   );
 
-  // Recording banner state: "hidden" | "recording" | "paused" | "ready"
+  // Recording banner
   const [recordingBannerState, setRecordingBannerState] = useState("hidden");
 
-  // Settings menu open/closed
+  // Settings menu
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // ==== PLAYER STATE ====
@@ -141,7 +142,7 @@ function App() {
   const [playerTitle, setPlayerTitle] = useState("");
   const [playerMeta, setPlayerMeta] = useState("");
   const [playerTimeText, setPlayerTimeText] = useState("0:00 / 0:00");
-  const [playerSeek, setPlayerSeek] = useState(0); // 0–100
+  const [playerSeek, setPlayerSeek] = useState(0);
   const [playerIsPlaying, setPlayerIsPlaying] = useState(false);
   const [playerSpeed, setPlayerSpeed] = useState(1.0);
   const [audioUrl, setAudioUrl] = useState(null);
@@ -173,12 +174,11 @@ function App() {
     setPlayerTimeText(`${formatTimeDisplay(cur)} / ${formatTimeDisplay(dur)}`);
   };
 
-  // Prevent duplicate processing of the same incoming deep link
+  // Prevent duplicate processing of incoming deep link
   const lastHandledUrlRef = useRef("");
 
   const handleIncomingDeepLink = (url) => {
     if (!url) return;
-
     if (lastHandledUrlRef.current === url) return;
     lastHandledUrlRef.current = url;
 
@@ -195,17 +195,10 @@ function App() {
       );
     }
 
-    console.log(
-      "[deeplink] handled:",
-      url,
-      "appointmentId:",
-      appt || "(none)",
-      "current href:",
-      window.location.href
-    );
+    console.log("[deeplink] handled:", url, "appointmentId:", appt || "(none)");
   };
 
-  // Handle deep link: cold start + appUrlOpen (native only)
+  // Deep link handling (native only)
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
 
@@ -215,7 +208,6 @@ function App() {
     (async () => {
       const mod = await import("@capacitor/app");
       const CapApp = mod.App;
-
       if (cancelled) return;
 
       CapApp.getLaunchUrl()
@@ -240,11 +232,12 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Log boot href once at app start
+  // Boot href
   useEffect(() => {
     console.log("[boot] href:", window.location.href);
   }, []);
 
+  // User display
   useEffect(() => {
     if (user) {
       setUserDisplay(`User: ${user.name || user.email || "(unknown)"}`);
@@ -253,18 +246,17 @@ function App() {
     }
   }, [user]);
 
-  // Read appointmentId + optional returnUrl from URL on first load (browser + capacitor)
+  // Read appointmentId from URL on first load
   useEffect(() => {
     const appt =
       extractAppointmentIdFromUrl(window.location.href) ||
       extractAppointmentIdFromUrl(window.location.toString());
 
     if (appt) setAppointmentId(appt);
-
     captureSalesforceReturnUrlFromLocation(window.location.href);
   }, []);
 
-  // Online/offline handling
+  // Online/offline
   useEffect(() => {
     function handleOnline() {
       setNetworkStatus("Online");
@@ -300,11 +292,8 @@ function App() {
     const trimmed = newId.trim();
     setAppointmentId(trimmed);
 
-    if (!trimmed) {
-      setStatusText("Appointment ID cleared. Set one before saving.");
-    } else {
-      setStatusText(`Using appointment ID: ${trimmed}`);
-    }
+    if (!trimmed) setStatusText("Appointment ID cleared. Set one before saving.");
+    else setStatusText(`Using appointment ID: ${trimmed}`);
   };
 
   const clearAppCacheAndReload = async () => {
@@ -317,9 +306,7 @@ function App() {
       if ("indexedDB" in window) {
         try {
           indexedDB.deleteDatabase("fs-voice-recorder");
-        } catch (e) {
-          console.warn("Error deleting IndexedDB", e);
-        }
+        } catch {}
       }
 
       if ("caches" in window) {
@@ -344,7 +331,6 @@ function App() {
   const handleSyncRecordings = async () => {
     setSettingsOpen(false);
     setStatusText("Syncing recordings and status updates…");
-
     try {
       await syncUploads?.();
       await clearUploadedLocals?.();
@@ -363,10 +349,11 @@ function App() {
 
   const handleSignOut = () => {
     setSettingsOpen(false);
+    setStatusText("Signing out…");
     logout();
   };
 
-  // ==== PLAYER LOGIC ====
+  // Player effects
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -404,9 +391,7 @@ function App() {
 
   useEffect(() => {
     if (!playerIsPlaying) return;
-    const t = setInterval(() => {
-      updatePlayerUIFromAudio();
-    }, 250);
+    const t = setInterval(updatePlayerUIFromAudio, 250);
     return () => clearInterval(t);
   }, [playerIsPlaying]);
 
@@ -458,10 +443,8 @@ function App() {
         setStatusText("Fetching audio from cloud…");
         const data = await getPlaybackUrl(idToken, { s3Key: record.cloud.s3Key });
         if (!data.playbackUrl) throw new Error("No playbackUrl returned");
-
         const sep = data.playbackUrl.includes("?") ? "&" : "?";
         setAudioUrl(`${data.playbackUrl}${sep}cb=${Date.now()}`);
-
         setStatusText("Playing cloud recording.");
         return;
       }
@@ -491,7 +474,6 @@ function App() {
 
   const playerSpeedText = `${playerSpeed.toFixed(2).replace(/\.00$/, "")}x`;
 
-  // ==== SALESFORCE STATUS HELPERS ====
   const handleMarkStartInSalesforce = async () => {
     if (!appointmentId) {
       setStatusText(
@@ -501,26 +483,14 @@ function App() {
     }
 
     try {
-      console.log("[SF START] tapped", {
-        appointmentId,
-        online: navigator.onLine,
-        hasToken: !!idToken,
-        userSub: user?.sub,
-      });
-
       setStatusText("Sending Salesforce status update (START)…");
-
       await queueSfEvent({
         appointmentId,
         eventType: "START",
         statusValue: "In Progress",
         occurredAt: new Date().toISOString(),
       });
-
-      if (navigator.onLine) {
-        await syncSfPending();
-      }
-
+      if (navigator.onLine) await syncSfPending();
       setStatusText("Salesforce status update sent.");
     } catch (e) {
       console.warn("[SF START] failed", e);
@@ -531,7 +501,6 @@ function App() {
     }
   };
 
-  // On save, deep-link the user back into Field Service (instead of status update).
   const handleReturnToFieldService = async (savedRecord) => {
     const apptId = savedRecord?.appointmentId || appointmentId;
     if (!apptId) return;
@@ -546,18 +515,7 @@ function App() {
     }
   };
 
-  useEffect(() => {
-    if (!loading) return;
-    const t = setTimeout(() => {
-      setStatusText((prev) =>
-        prev ||
-        "Still loading… If this doesn’t resolve, check Xcode console for [boot] href and auth errors (Safari Web Inspector can also show console/network)."
-      );
-    }, 6000);
-    return () => clearTimeout(t);
-  }, [loading]);
-
-  // ==== LOADING / AUTH GUARD ====
+  // ==== AUTH GUARD UI ====
   if (loading) {
     return (
       <div className="c-main">
@@ -568,7 +526,23 @@ function App() {
   }
 
   if (!isAuthenticated) {
-    return <SignInRedirect statusText={statusText} onLogin={login} />;
+    // ✅ Disable auto-login during logout on BOTH web and native to prevent bounce.
+    const disableAutoLogin =
+      isLoggingOut || (!Capacitor.isNativePlatform() && isLoggingOut);
+
+    const effectiveStatus =
+      statusText ||
+      (isLoggingOut
+        ? "Signing out…"
+        : "Redirecting to sign-in…");
+
+    return (
+      <SignInRedirect
+        statusText={effectiveStatus}
+        onLogin={login}
+        disableAutoLogin={disableAutoLogin}
+      />
+    );
   }
 
   return (

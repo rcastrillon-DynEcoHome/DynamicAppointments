@@ -1,5 +1,5 @@
 // src/hooks/useAuth.js
-console.log("[AUTH BUILD]", "2025-12-19T-fix-web-logout-and-ios-v2");
+console.log("[AUTH BUILD]", "2025-12-19T-ios-smooth-logout-v1");
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Capacitor } from "@capacitor/core";
@@ -19,26 +19,23 @@ const WEB_REDIRECT_URI = window.location.origin + "/";
 const TOKEN_KEY = "fsr_id_token";
 const USER_INFO_KEY = "fsr_user_info";
 
-// Web-only: keep a short "recent logout" marker across the Cognito redirect
+// Web-only: short "recent logout" marker across Cognito redirect
 const LOGOUT_MARK_KEY = "fsr_recent_logout_ms";
-const LOGOUT_MARK_TTL_MS = 2 * 60 * 1000; // 2 minutes (plenty for redirect roundtrip)
+const LOGOUT_MARK_TTL_MS = 2 * 60 * 1000; // 2 minutes
 
 function _now() {
   return Date.now();
 }
-
 function markRecentLogout() {
   try {
     sessionStorage.setItem(LOGOUT_MARK_KEY, String(_now()));
   } catch {}
 }
-
 function clearRecentLogout() {
   try {
     sessionStorage.removeItem(LOGOUT_MARK_KEY);
   } catch {}
 }
-
 function hasRecentLogout() {
   try {
     const v = sessionStorage.getItem(LOGOUT_MARK_KEY);
@@ -51,8 +48,7 @@ function hasRecentLogout() {
 
 /**
  * IMPORTANT:
- * We load Capacitor plugins dynamically AND wrap them in plain objects
- * to avoid the iOS "Browser.then() / App.then() is not implemented" issue.
+ * Dynamic imports + plain-object wrappers to avoid iOS "Plugin.then()" issue.
  */
 async function getCapBrowser() {
   if (!Capacitor.isNativePlatform()) return null;
@@ -61,7 +57,6 @@ async function getCapBrowser() {
     const Browser = mod.Browser;
     if (!Browser) return null;
 
-    // Return a NON-thenable wrapper object
     return {
       open: (opts) => Browser.open(opts),
       close: () => Browser.close(),
@@ -79,7 +74,6 @@ async function getCapApp() {
     const App = mod.App;
     if (!App) return null;
 
-    // Return a NON-thenable wrapper object
     return {
       getLaunchUrl: () => App.getLaunchUrl(),
       addListener: (eventName, cb) => App.addListener(eventName, cb),
@@ -137,15 +131,20 @@ function buildAuthorizeUrl({ identityProvider } = {}) {
   return url;
 }
 
+function buildLogoutUrl() {
+  return (
+    `${COGNITO_DOMAIN}/logout` +
+    `?client_id=${encodeURIComponent(COGNITO_CLIENT_ID)}` +
+    `&logout_uri=${encodeURIComponent(getRedirectUri())}`
+  );
+}
+
 export function useAuth() {
   const [idToken, setIdToken] = useState(null);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Prevent duplicate callback handling
   const handledAuthRef = useRef(false);
-
-  // Track a logout flow (native in-memory; web persisted in sessionStorage)
   const isLoggingOutRef = useRef(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
@@ -158,7 +157,6 @@ export function useAuth() {
   }, []);
 
   const applyToken = useCallback((token) => {
-    // If you successfully log in, you're not "logging out" anymore
     isLoggingOutRef.current = false;
     setIsLoggingOut(false);
     clearRecentLogout();
@@ -166,7 +164,6 @@ export function useAuth() {
     handledAuthRef.current = true;
 
     localStorage.setItem(TOKEN_KEY, token);
-
     const claims = decodeJwt(token) || {};
     localStorage.setItem(USER_INFO_KEY, JSON.stringify(claims));
 
@@ -193,11 +190,9 @@ export function useAuth() {
     return null;
   }, [clearAuthState]);
 
-  // ✅ Expose a login() function that always starts the Hosted UI flow.
   const login = useCallback(async ({ authMode } = {}) => {
     handledAuthRef.current = false;
 
-    // user initiated login should clear "recent logout" markers
     isLoggingOutRef.current = false;
     setIsLoggingOut(false);
     clearRecentLogout();
@@ -206,7 +201,6 @@ export function useAuth() {
 
     const params = new URLSearchParams(window.location.search);
     const mode = authMode || params.get("authMode"); // 'sf' for Salesforce
-
     const loginUrl =
       mode === "sf"
         ? buildAuthorizeUrl({ identityProvider: SALESFORCE_IDP_NAME })
@@ -230,7 +224,7 @@ export function useAuth() {
     let sub;
 
     async function ensureAuthenticated() {
-      // 1) Callback (web hash)
+      // 1) Web callback hash
       const hashParams = parseHashFragmentFromUrl(window.location.href);
       if (hashParams.id_token) {
         applyToken(hashParams.id_token);
@@ -245,7 +239,7 @@ export function useAuth() {
       // 2) Existing token
       if (loadValidStoredToken()) return;
 
-      // 3) Web: if we JUST logged out, do NOT auto-start login again
+      // 3) Web: don't auto-login immediately after logout
       if (!Capacitor.isNativePlatform() && hasRecentLogout()) {
         isLoggingOutRef.current = true;
         setIsLoggingOut(true);
@@ -256,7 +250,6 @@ export function useAuth() {
       // 4) Start auth flow
       const params = new URLSearchParams(window.location.search);
       const authMode = params.get("authMode");
-
       const loginUrl =
         authMode === "sf"
           ? buildAuthorizeUrl({ identityProvider: SALESFORCE_IDP_NAME })
@@ -266,14 +259,13 @@ export function useAuth() {
         const Browser = await getCapBrowser();
         const CapApp = await getCapApp();
 
-        if (!Browser?.open || !CapApp?.addListener || !CapApp?.getLaunchUrl) {
+        if (!Browser?.open || !Browser?.close || !CapApp?.addListener || !CapApp?.getLaunchUrl) {
           console.error("[auth] Capacitor plugins not available (sync + rebuild).");
           setLoading(false);
           return;
         }
 
         const handleAuthUrl = async (url) => {
-          console.log("[auth] received app url:", url);
           if (!url) return;
           if (!url.startsWith(NATIVE_REDIRECT_URI)) return;
 
@@ -295,15 +287,28 @@ export function useAuth() {
             return;
           }
 
-          // LOGOUT callback (redirects back without hash) OR canceled login
+          // NO id_token:
+          // - logout redirect back to app
+          // - or user cancelled auth
           try {
             await Browser.close();
           } catch {}
 
           clearAuthState();
+
+          const wasLogout = isLoggingOutRef.current === true;
+
           handledAuthRef.current = false;
           isLoggingOutRef.current = false;
           setIsLoggingOut(false);
+
+          // ✅ Smooth native UX: if this was *our* logout, go straight to login Hosted UI
+          if (wasLogout) {
+            try {
+              // Keep UI stable in-app; immediately open sign-in UI in browser
+              await Browser.open({ url: loginUrl });
+            } catch {}
+          }
         };
 
         // cold start
@@ -320,7 +325,12 @@ export function useAuth() {
           await handleAuthUrl(event?.url || "");
         });
 
-        await Browser.open({ url: loginUrl });
+        // Only auto-open login if we aren't mid-logout
+        if (!isLoggingOutRef.current) {
+          await Browser.open({ url: loginUrl });
+        } else {
+          setLoading(false);
+        }
         return;
       }
 
@@ -340,7 +350,7 @@ export function useAuth() {
     };
   }, [applyToken, clearAuthState, loadValidStoredToken]);
 
-  // Re-validate on foreground (native)
+  // Foreground re-validate (native)
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
 
@@ -352,9 +362,7 @@ export function useAuth() {
       if (cancelled || !CapApp?.addListener) return;
 
       sub = CapApp.addListener("appStateChange", (state) => {
-        if (state?.isActive) {
-          loadValidStoredToken();
-        }
+        if (state?.isActive) loadValidStoredToken();
       });
     })().catch(() => {});
 
@@ -371,17 +379,13 @@ export function useAuth() {
     isLoggingOutRef.current = true;
     setIsLoggingOut(true);
 
-    // Web needs persistence across the Cognito redirect
     if (!Capacitor.isNativePlatform()) {
       markRecentLogout();
     }
 
-    const logoutUrl =
-      `${COGNITO_DOMAIN}/logout` +
-      `?client_id=${encodeURIComponent(COGNITO_CLIENT_ID)}` +
-      `&logout_uri=${encodeURIComponent(getRedirectUri())}`;
+    const logoutUrl = buildLogoutUrl();
 
-    // clear local state immediately
+    // clear local state immediately (so the app UI updates right away)
     handledAuthRef.current = false;
     clearAuthState();
 
@@ -395,7 +399,6 @@ export function useAuth() {
       return;
     }
 
-    // Web: use replace so back button doesn't bounce
     window.location.replace(logoutUrl);
   }, [clearAuthState]);
 
@@ -432,6 +435,6 @@ export function useAuth() {
     isAuthenticated: computedIsAuthenticated,
     login,
     logout,
-    isLoggingOut, // <- App.jsx uses this to disable auto-login on web after logout
+    isLoggingOut,
   };
 }

@@ -1,5 +1,6 @@
 // src/recorderService.js
 import { Capacitor } from "@capacitor/core";
+import { Filesystem } from "@capacitor/filesystem";
 
 /** --- platform helpers --- */
 export function isNative() {
@@ -21,13 +22,13 @@ function safeJsonParse(maybeJson) {
     return maybeJson;
   }
 }
-
+/*
 async function getCapFilesystem() {
   if (!Capacitor.isNativePlatform()) return null;
   const mod = await import("@capacitor/filesystem");
   return mod.Filesystem;
 }
-
+*/
 function base64ToBlob(base64, mimeType) {
   const byteChars = atob(base64);
   const byteNumbers = new Array(byteChars.length);
@@ -57,8 +58,8 @@ async function nativeUriToBlob(uri, mimeType) {
 
   // --- 1) BEST PATH (iOS): read full file:// path via Filesystem with NO directory ---
   try {
-    const Filesystem = await getCapFilesystem();
-    if (!Filesystem?.readFile) throw new Error("Filesystem plugin not available");
+    //const Filesystem = await getCapFilesystem();
+    //if (!Filesystem?.readFile) throw new Error("Filesystem plugin not available");
 
     const { data } = await Filesystem.readFile({ path: fileUri });
     if (!data) throw new Error("Filesystem.readFile returned empty data");

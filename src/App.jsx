@@ -57,18 +57,37 @@ function extractAppointmentIdFromUrl(urlString) {
     return "";
   }
 }
-function SignInRedirect({ statusText, onLogin }) {
+function SignInRedirect({ statusText, onLogin, disableAutoLogin = false }) {
   const startedRef = React.useRef(false);
 
   React.useEffect(() => {
+    if (disableAutoLogin) return;
     if (startedRef.current) return;
     startedRef.current = true;
     onLogin?.();
-  }, [onLogin]);
+  }, [onLogin, disableAutoLogin]);
+
+  const handleManualSignIn = () => {
+    try {
+      localStorage.removeItem("fsr_logged_out");
+    } catch {}
+    onLogin?.();
+  };
 
   return (
     <div className="c-main">
       <p>Redirecting to sign-in…</p>
+
+      {disableAutoLogin ? (
+        <button
+          className="c-btn c-btn-primary"
+          onClick={handleManualSignIn}
+          style={{ marginTop: 12 }}
+        >
+          Sign in
+        </button>
+      ) : null}
+
       {statusText ? <p style={{ opacity: 0.8 }}>{statusText}</p> : null}
     </div>
   );
@@ -363,6 +382,14 @@ function App() {
 
   const handleSignOut = () => {
     setSettingsOpen(false);
+
+    // Web: prevent auto re-login after logout redirect
+    if (!Capacitor.isNativePlatform()) {
+      try {
+        localStorage.setItem("fsr_logged_out", "1");
+      } catch {}
+    }
+
     logout();
   };
 
@@ -576,7 +603,22 @@ function App() {
   }
 
   if (!isAuthenticated) {
-    return <SignInRedirect statusText={statusText} onLogin={login} />;
+    let disableAutoLogin = false;
+
+    // If we just logged out on web, show manual sign-in instead of auto-starting login()
+    if (!Capacitor.isNativePlatform()) {
+      try {
+        disableAutoLogin = localStorage.getItem("fsr_logged_out") === "1";
+      } catch {}
+    }
+
+    return (
+      <SignInRedirect
+        statusText={statusText}
+        onLogin={login}
+        disableAutoLogin={disableAutoLogin}
+      />
+    );
   }
 
   return (

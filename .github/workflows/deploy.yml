@@ -35,6 +35,21 @@ jobs:
         run: |
           aws s3 sync dist s3://dynamic-consultation-webapp --delete
 
+          # Force correct Content-Type for Apple App Site Association files
+          if [ -f dist/.well-known/apple-app-site-association ]; then
+            aws s3 cp dist/.well-known/apple-app-site-association \
+              s3://dynamic-consultation-webapp/.well-known/apple-app-site-association \
+              --content-type "application/json" \
+              --cache-control "no-cache"
+          fi
+
+          if [ -f dist/apple-app-site-association ]; then
+            aws s3 cp dist/apple-app-site-association \
+              s3://dynamic-consultation-webapp/apple-app-site-association \
+              --content-type "application/json" \
+              --cache-control "no-cache"
+          fi
+
       - name: Invalidate CloudFront cache
         run: |
           aws cloudfront create-invalidation \

@@ -16,6 +16,8 @@ import {
   returnToFieldService,
 } from "./lib/sfDeepLink.js";
 
+const NATIVE_AUTH_REDIRECT_PREFIX = "dynappointments://auth";
+
 function formatTimeDisplay(seconds) {
   if (!seconds || isNaN(seconds)) return "0:00";
   const total = Math.floor(seconds);
@@ -24,9 +26,6 @@ function formatTimeDisplay(seconds) {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
-// Extract appointmentId from links like:
-// - https://host/record?appointmentId=TEST123
-// - capacitor://localhost/record?appointmentId=TEST123
 function extractAppointmentIdFromUrl(urlString) {
   if (!urlString) return "";
 
@@ -41,6 +40,7 @@ function extractAppointmentIdFromUrl(urlString) {
       const params = new URLSearchParams(hash.slice(qIndex + 1));
       return params.get("appointmentId") || "";
     }
+
     return "";
   } catch {
     const qIndex = urlString.indexOf("?");
@@ -65,7 +65,6 @@ function SignInRedirect({ statusText, onLogin, disableAutoLogin = false }) {
   return (
     <div className="c-main">
       <p>Redirecting to sign-in…</p>
-
       {disableAutoLogin ? (
         <button
           className="c-btn c-btn-primary"
@@ -75,16 +74,46 @@ function SignInRedirect({ statusText, onLogin, disableAutoLogin = false }) {
           Sign in
         </button>
       ) : null}
-
       {statusText ? <p style={{ opacity: 0.8 }}>{statusText}</p> : null}
+    </div>
+  );
+}
+
+function NativeAuthOverlay({ text = "Working…" }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(255,255,255,0.92)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 9999,
+        padding: 24,
+        textAlign: "center",
+      }}
+    >
+      <div>
+        <p style={{ margin: 0, fontWeight: 600 }}>{text}</p>
+        <p style={{ marginTop: 10, opacity: 0.75 }}>Please wait…</p>
+      </div>
     </div>
   );
 }
 
 function App() {
   // ==== AUTH ====
-  const { user, loading, isAuthenticated, login, logout, idToken, isLoggingOut } =
-    useAuth();
+  const {
+    user,
+    loading,
+    isAuthenticated,
+    login,
+    logout,
+    idToken,
+    isLoggingOut,
+    nativeAuthTransition,
+  } = useAuth();
 
   // ==== RECORDINGS (local + cloud) ====
   const {
@@ -111,27 +140,16 @@ function App() {
   const { queueEvent: queueSfEvent, syncPending: syncSfPending } =
     useSfStatusQueue({ idToken, user });
 
-  // Header display
   const [userDisplay, setUserDisplay] = useState("User: (unknown)");
-
-  // Appointment ID
   const [appointmentId, setAppointmentId] = useState("");
-
-  // Active tab: "new" | "list"
   const [activeTab, setActiveTab] = useState("new");
-
-  // Status text
   const [statusText, setStatusText] = useState("");
 
-  // Network status
   const [networkStatus, setNetworkStatus] = useState(
     navigator.onLine ? "Online" : "Offline"
   );
 
-  // Recording banner
   const [recordingBannerState, setRecordingBannerState] = useState("hidden");
-
-  // Settings menu
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // ==== PLAYER STATE ====
@@ -174,11 +192,15 @@ function App() {
     setPlayerTimeText(`${formatTimeDisplay(cur)} / ${formatTimeDisplay(dur)}`);
   };
 
-  // Prevent duplicate processing of incoming deep link
+  // Prevent duplicate processing of the same incoming deep link
   const lastHandledUrlRef = useRef("");
 
   const handleIncomingDeepLink = (url) => {
     if (!url) return;
+
+    // ✅ Ignore auth redirects so we don’t show “Opened from Field Service…”
+    if (url.startsWith(NATIVE_AUTH_REDIRECT_PREFIX)) return;
+
     if (lastHandledUrlRef.current === url) return;
     lastHandledUrlRef.current = url;
 
@@ -194,11 +216,9 @@ function App() {
         "Opened from Field Service, but no appointmentId was found in the link."
       );
     }
-
-    console.log("[deeplink] handled:", url, "appointmentId:", appt || "(none)");
   };
 
-  // Deep link handling (native only)
+  // Handle deep link: cold start + appUrlOpen (native only)
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
 
@@ -232,31 +252,23 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Boot href
   useEffect(() => {
     console.log("[boot] href:", window.location.href);
   }, []);
 
-  // User display
   useEffect(() => {
-    if (user) {
-      setUserDisplay(`User: ${user.name || user.email || "(unknown)"}`);
-    } else {
-      setUserDisplay("User: (unknown)");
-    }
+    if (user) setUserDisplay(`User: ${user.name || user.email || "(unknown)"}`);
+    else setUserDisplay("User: (unknown)");
   }, [user]);
 
-  // Read appointmentId from URL on first load
   useEffect(() => {
     const appt =
       extractAppointmentIdFromUrl(window.location.href) ||
       extractAppointmentIdFromUrl(window.location.toString());
-
     if (appt) setAppointmentId(appt);
     captureSalesforceReturnUrlFromLocation(window.location.href);
   }, []);
 
-  // Online/offline
   useEffect(() => {
     function handleOnline() {
       setNetworkStatus("Online");
@@ -306,7 +318,9 @@ function App() {
       if ("indexedDB" in window) {
         try {
           indexedDB.deleteDatabase("fs-voice-recorder");
-        } catch {}
+        } catch (e) {
+          console.warn("Error deleting IndexedDB", e);
+        }
       }
 
       if ("caches" in window) {
@@ -331,6 +345,7 @@ function App() {
   const handleSyncRecordings = async () => {
     setSettingsOpen(false);
     setStatusText("Syncing recordings and status updates…");
+
     try {
       await syncUploads?.();
       await clearUploadedLocals?.();
@@ -353,7 +368,7 @@ function App() {
     logout();
   };
 
-  // Player effects
+  // ==== PLAYER LOGIC ====
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -391,7 +406,7 @@ function App() {
 
   useEffect(() => {
     if (!playerIsPlaying) return;
-    const t = setInterval(updatePlayerUIFromAudio, 250);
+    const t = setInterval(() => updatePlayerUIFromAudio(), 250);
     return () => clearInterval(t);
   }, [playerIsPlaying]);
 
@@ -443,6 +458,7 @@ function App() {
         setStatusText("Fetching audio from cloud…");
         const data = await getPlaybackUrl(idToken, { s3Key: record.cloud.s3Key });
         if (!data.playbackUrl) throw new Error("No playbackUrl returned");
+
         const sep = data.playbackUrl.includes("?") ? "&" : "?";
         setAudioUrl(`${data.playbackUrl}${sep}cb=${Date.now()}`);
         setStatusText("Playing cloud recording.");
@@ -468,7 +484,6 @@ function App() {
 
     const url = URL.createObjectURL(item.blob);
     setAudioUrl(url);
-
     setStatusText("Previewing current recording (not yet saved).");
   };
 
@@ -484,12 +499,14 @@ function App() {
 
     try {
       setStatusText("Sending Salesforce status update (START)…");
+
       await queueSfEvent({
         appointmentId,
         eventType: "START",
         statusValue: "In Progress",
         occurredAt: new Date().toISOString(),
       });
+
       if (navigator.onLine) await syncSfPending();
       setStatusText("Salesforce status update sent.");
     } catch (e) {
@@ -515,7 +532,7 @@ function App() {
     }
   };
 
-  // ==== AUTH GUARD UI ====
+  // ==== AUTH GUARD ====
   if (loading) {
     return (
       <div className="c-main">
@@ -526,114 +543,121 @@ function App() {
   }
 
   if (!isAuthenticated) {
-    // ✅ Disable auto-login during logout on BOTH web and native to prevent bounce.
-    const disableAutoLogin =
-      isLoggingOut || (!Capacitor.isNativePlatform() && isLoggingOut);
-
-    const effectiveStatus =
-      statusText ||
-      (isLoggingOut
-        ? "Signing out…"
-        : "Redirecting to sign-in…");
+    // ✅ On native: do NOT auto-call login from SignInRedirect
+    // useAuth is the only code that opens Browser.open (prevents double-open flicker).
+    const disableAutoLogin = Capacitor.isNativePlatform()
+      ? true
+      : isLoggingOut;
 
     return (
-      <SignInRedirect
-        statusText={effectiveStatus}
-        onLogin={login}
-        disableAutoLogin={disableAutoLogin}
-      />
+      <>
+        <SignInRedirect
+          statusText={statusText}
+          onLogin={login}
+          disableAutoLogin={disableAutoLogin}
+        />
+        {Capacitor.isNativePlatform() && nativeAuthTransition ? (
+          <NativeAuthOverlay text={isLoggingOut ? "Signing out…" : "Signing in…"} />
+        ) : null}
+      </>
     );
   }
 
   return (
-    <div className="app-root">
-      <div className="c-header-shell">
-        <Header
-          userDisplay={userDisplay}
-          appointmentDisplay={""}
-          onSettingsClick={() => setSettingsOpen((open) => !open)}
-          isSettingsOpen={settingsOpen}
-          onSyncRecordings={handleSyncRecordings}
-          onClearCache={handleClearCache}
-          onSignOut={handleSignOut}
-        />
-        <RecordingStatusBanner state={recordingBannerState} />
+    <>
+      <div className="app-root">
+        <div className="c-header-shell">
+          <Header
+            userDisplay={userDisplay}
+            appointmentDisplay={""}
+            onSettingsClick={() => setSettingsOpen((open) => !open)}
+            isSettingsOpen={settingsOpen}
+            onSyncRecordings={handleSyncRecordings}
+            onClearCache={handleClearCache}
+            onSignOut={handleSignOut}
+          />
+          <RecordingStatusBanner state={recordingBannerState} />
+        </div>
+
+        <main className="c-main">
+          <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+
+          <NewRecordingPanel
+            isActive={activeTab === "new"}
+            appointmentDisplayText={appointmentDisplayText}
+            onAppointmentClick={handleAppointmentClick}
+            statusText={statusText}
+            onStatusChange={setStatusText}
+            onBannerChange={setRecordingBannerState}
+            appointmentId={appointmentId}
+            onSaveRecording={saveNewLocalRecording}
+            onSaved={() => setActiveTab("list")}
+            onMarkStart={handleMarkStartInSalesforce}
+            onAfterSave={handleReturnToFieldService}
+            onPreviewRecording={handlePreviewRecording}
+          />
+
+          <RecordingsList
+            isActive={activeTab === "list"}
+            recordings={unifiedRecordings}
+            filterFrom={filterFrom}
+            filterTo={filterTo}
+            filterStatus={filterStatus}
+            filterDevice={filterDevice}
+            setFilterFrom={setFilterFrom}
+            setFilterTo={setFilterTo}
+            setFilterStatus={setFilterStatus}
+            setFilterDevice={setFilterDevice}
+            loading={recordingsLoading}
+            message={recordingsMessage}
+            deviceId={deviceId}
+            onUploadLocal={uploadRecording}
+            onDeleteLocal={deleteLocal}
+            onSelectRecording={handleSelectRecording}
+          />
+        </main>
+
+        <div className="c-bottom-shell">
+          <AudioPlayer
+            visible={playerVisible}
+            title={playerTitle}
+            meta={playerMeta}
+            timeText={playerTimeText}
+            speedText={playerSpeedText}
+            seekValue={playerSeek}
+            isPlaying={playerIsPlaying}
+            onPlayPause={handlePlayerPlayPause}
+            onSeek={handlePlayerSeek}
+            onSpeedDown={handlePlayerSpeedDown}
+            onSpeedUp={handlePlayerSpeedUp}
+            audioRef={audioRef}
+            src={audioUrl}
+            onLoadedMetadata={updatePlayerUIFromAudio}
+            onTimeUpdate={updatePlayerUIFromAudio}
+            onDurationChange={updatePlayerUIFromAudio}
+            onEnded={() => {
+              setPlayerIsPlaying(false);
+              updatePlayerUIFromAudio();
+            }}
+            onPlay={() => {
+              setPlayerIsPlaying(true);
+              updatePlayerUIFromAudio();
+            }}
+            onPause={() => {
+              setPlayerIsPlaying(false);
+              updatePlayerUIFromAudio();
+            }}
+          />
+          <footer className="c-footer">
+            <span id="networkStatus">{networkStatus}</span>
+          </footer>
+        </div>
       </div>
 
-      <main className="c-main">
-        <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
-
-        <NewRecordingPanel
-          isActive={activeTab === "new"}
-          appointmentDisplayText={appointmentDisplayText}
-          onAppointmentClick={handleAppointmentClick}
-          statusText={statusText}
-          onStatusChange={setStatusText}
-          onBannerChange={setRecordingBannerState}
-          appointmentId={appointmentId}
-          onSaveRecording={saveNewLocalRecording}
-          onSaved={() => setActiveTab("list")}
-          onMarkStart={handleMarkStartInSalesforce}
-          onAfterSave={handleReturnToFieldService}
-          onPreviewRecording={handlePreviewRecording}
-        />
-
-        <RecordingsList
-          isActive={activeTab === "list"}
-          recordings={unifiedRecordings}
-          filterFrom={filterFrom}
-          filterTo={filterTo}
-          filterStatus={filterStatus}
-          filterDevice={filterDevice}
-          setFilterFrom={setFilterFrom}
-          setFilterTo={setFilterTo}
-          setFilterStatus={setFilterStatus}
-          setFilterDevice={setFilterDevice}
-          loading={recordingsLoading}
-          message={recordingsMessage}
-          deviceId={deviceId}
-          onUploadLocal={uploadRecording}
-          onDeleteLocal={deleteLocal}
-          onSelectRecording={handleSelectRecording}
-        />
-      </main>
-
-      <div className="c-bottom-shell">
-        <AudioPlayer
-          visible={playerVisible}
-          title={playerTitle}
-          meta={playerMeta}
-          timeText={playerTimeText}
-          speedText={playerSpeedText}
-          seekValue={playerSeek}
-          isPlaying={playerIsPlaying}
-          onPlayPause={handlePlayerPlayPause}
-          onSeek={handlePlayerSeek}
-          onSpeedDown={handlePlayerSpeedDown}
-          onSpeedUp={handlePlayerSpeedUp}
-          audioRef={audioRef}
-          src={audioUrl}
-          onLoadedMetadata={updatePlayerUIFromAudio}
-          onTimeUpdate={updatePlayerUIFromAudio}
-          onDurationChange={updatePlayerUIFromAudio}
-          onEnded={() => {
-            setPlayerIsPlaying(false);
-            updatePlayerUIFromAudio();
-          }}
-          onPlay={() => {
-            setPlayerIsPlaying(true);
-            updatePlayerUIFromAudio();
-          }}
-          onPause={() => {
-            setPlayerIsPlaying(false);
-            updatePlayerUIFromAudio();
-          }}
-        />
-        <footer className="c-footer">
-          <span id="networkStatus">{networkStatus}</span>
-        </footer>
-      </div>
-    </div>
+      {Capacitor.isNativePlatform() && nativeAuthTransition ? (
+        <NativeAuthOverlay text={isLoggingOut ? "Signing out…" : "Signing in…"} />
+      ) : null}
+    </>
   );
 }
 

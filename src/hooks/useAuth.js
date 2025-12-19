@@ -1,5 +1,5 @@
 // src/hooks/useAuth.js
-console.log("[AUTH BUILD]", "2025-12-19T-ios-smooth-logout-v1");
+console.log("[AUTH BUILD]", "2025-12-19T-native-single-browser-open");
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Capacitor } from "@capacitor/core";
@@ -19,7 +19,7 @@ const WEB_REDIRECT_URI = window.location.origin + "/";
 const TOKEN_KEY = "fsr_id_token";
 const USER_INFO_KEY = "fsr_user_info";
 
-// Web-only: short "recent logout" marker across Cognito redirect
+// Web-only: keep a short "recent logout" marker across the Cognito redirect
 const LOGOUT_MARK_KEY = "fsr_recent_logout_ms";
 const LOGOUT_MARK_TTL_MS = 2 * 60 * 1000; // 2 minutes
 
@@ -48,7 +48,8 @@ function hasRecentLogout() {
 
 /**
  * IMPORTANT:
- * Dynamic imports + plain-object wrappers to avoid iOS "Plugin.then()" issue.
+ * Load Capacitor plugins dynamically AND wrap them in plain objects
+ * to avoid iOS "Browser.then()" issues AND avoid thenable await traps.
  */
 async function getCapBrowser() {
   if (!Capacitor.isNativePlatform()) return null;
@@ -144,9 +145,21 @@ export function useAuth() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Prevent duplicate callback handling
   const handledAuthRef = useRef(false);
+
+  // Track a logout flow
   const isLoggingOutRef = useRef(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  // ✅ iOS: prevent Browser.open from being called twice (this is the root of your flicker)
+  const browserOpenInFlightRef = useRef(false);
+
+  // Optional: drive an overlay in App during native transitions (logout->login)
+  const [nativeAuthTransition, setNativeAuthTransition] = useState(false);
+
+  // Remember last authMode so logout can return to same login provider
+  const lastAuthModeRef = useRef("");
 
   const clearAuthState = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
@@ -160,10 +173,12 @@ export function useAuth() {
     isLoggingOutRef.current = false;
     setIsLoggingOut(false);
     clearRecentLogout();
+    setNativeAuthTransition(false);
 
     handledAuthRef.current = true;
 
     localStorage.setItem(TOKEN_KEY, token);
+
     const claims = decodeJwt(token) || {};
     localStorage.setItem(USER_INFO_KEY, JSON.stringify(claims));
 
@@ -190,41 +205,73 @@ export function useAuth() {
     return null;
   }, [clearAuthState]);
 
-  const login = useCallback(async ({ authMode } = {}) => {
-    handledAuthRef.current = false;
+  // ✅ Single authority opener for native
+  const openHostedUiNative = useCallback(
+    async (url) => {
+      if (!Capacitor.isNativePlatform()) return;
 
-    isLoggingOutRef.current = false;
-    setIsLoggingOut(false);
-    clearRecentLogout();
+      // Hard guard: if already opening/presented, do nothing.
+      if (browserOpenInFlightRef.current) return;
 
-    setLoading(true);
-
-    const params = new URLSearchParams(window.location.search);
-    const mode = authMode || params.get("authMode"); // 'sf' for Salesforce
-    const loginUrl =
-      mode === "sf"
-        ? buildAuthorizeUrl({ identityProvider: SALESFORCE_IDP_NAME })
-        : buildAuthorizeUrl();
-
-    if (Capacitor.isNativePlatform()) {
       const Browser = await getCapBrowser();
       if (!Browser?.open) {
         console.error("[auth] Browser plugin not available on native.");
-        setLoading(false);
         return;
       }
-      await Browser.open({ url: loginUrl });
-      return;
-    }
 
-    window.location.href = loginUrl;
-  }, []);
+      browserOpenInFlightRef.current = true;
+      try {
+        await Browser.open({ url });
+      } catch (e) {
+        // This is your "Unable to display URL" case
+        console.error("[auth] Browser.open failed:", e);
+      } finally {
+        // Release in-flight guard slightly later so iOS has time to settle
+        setTimeout(() => {
+          browserOpenInFlightRef.current = false;
+        }, 350);
+      }
+    },
+    []
+  );
+
+  const login = useCallback(
+    async ({ authMode } = {}) => {
+      handledAuthRef.current = false;
+
+      // user initiated login clears logout markers
+      isLoggingOutRef.current = false;
+      setIsLoggingOut(false);
+      clearRecentLogout();
+      setNativeAuthTransition(true);
+
+      setLoading(true);
+
+      const params = new URLSearchParams(window.location.search);
+      const mode = authMode || params.get("authMode") || "";
+      lastAuthModeRef.current = mode;
+
+      const loginUrl =
+        mode === "sf"
+          ? buildAuthorizeUrl({ identityProvider: SALESFORCE_IDP_NAME })
+          : buildAuthorizeUrl();
+
+      if (Capacitor.isNativePlatform()) {
+        await openHostedUiNative(loginUrl);
+        // Do NOT setLoading(false) here; we’ll resolve on callback
+        return;
+      }
+
+      window.location.href = loginUrl;
+    },
+    [openHostedUiNative]
+  );
 
   useEffect(() => {
     let sub;
 
     async function ensureAuthenticated() {
-      // 1) Web callback hash
+      // 1) Web hash callback
       const hashParams = parseHashFragmentFromUrl(window.location.href);
       if (hashParams.id_token) {
         applyToken(hashParams.id_token);
@@ -239,7 +286,7 @@ export function useAuth() {
       // 2) Existing token
       if (loadValidStoredToken()) return;
 
-      // 3) Web: don't auto-login immediately after logout
+      // 3) Web: if we JUST logged out, do NOT auto-start login again
       if (!Capacitor.isNativePlatform() && hasRecentLogout()) {
         isLoggingOutRef.current = true;
         setIsLoggingOut(true);
@@ -247,20 +294,27 @@ export function useAuth() {
         return;
       }
 
-      // 4) Start auth flow
+      // 4) Start auth flow (AUTO) — but only from here (App.jsx will NOT auto-login on native)
       const params = new URLSearchParams(window.location.search);
-      const authMode = params.get("authMode");
+      const authMode = params.get("authMode") || "";
+      lastAuthModeRef.current = authMode;
+
       const loginUrl =
         authMode === "sf"
           ? buildAuthorizeUrl({ identityProvider: SALESFORCE_IDP_NAME })
           : buildAuthorizeUrl();
 
       if (Capacitor.isNativePlatform()) {
-        const Browser = await getCapBrowser();
         const CapApp = await getCapApp();
+        if (!CapApp?.addListener || !CapApp?.getLaunchUrl) {
+          console.error("[auth] App plugin not available (sync + rebuild).");
+          setLoading(false);
+          return;
+        }
 
-        if (!Browser?.open || !Browser?.close || !CapApp?.addListener || !CapApp?.getLaunchUrl) {
-          console.error("[auth] Capacitor plugins not available (sync + rebuild).");
+        const Browser = await getCapBrowser();
+        if (!Browser?.close) {
+          console.error("[auth] Browser plugin not available (sync + rebuild).");
           setLoading(false);
           return;
         }
@@ -287,27 +341,33 @@ export function useAuth() {
             return;
           }
 
-          // NO id_token:
-          // - logout redirect back to app
-          // - or user cancelled auth
+          // LOGOUT callback (redirect back without hash) OR canceled login
           try {
             await Browser.close();
           } catch {}
 
           clearAuthState();
-
-          const wasLogout = isLoggingOutRef.current === true;
-
           handledAuthRef.current = false;
-          isLoggingOutRef.current = false;
-          setIsLoggingOut(false);
 
-          // ✅ Smooth native UX: if this was *our* logout, go straight to login Hosted UI
-          if (wasLogout) {
-            try {
-              // Keep UI stable in-app; immediately open sign-in UI in browser
-              await Browser.open({ url: loginUrl });
-            } catch {}
+          // If we were logging out, immediately go back to login Hosted UI
+          // (prevents blank “in-between” state)
+          if (isLoggingOutRef.current) {
+            isLoggingOutRef.current = false;
+            setIsLoggingOut(false);
+            setNativeAuthTransition(true);
+
+            // Small delay to allow iOS to finish dismissing SafariVC
+            const mode = lastAuthModeRef.current || "";
+            const nextLoginUrl =
+              mode === "sf"
+                ? buildAuthorizeUrl({ identityProvider: SALESFORCE_IDP_NAME })
+                : buildAuthorizeUrl();
+
+            setTimeout(() => {
+              openHostedUiNative(nextLoginUrl);
+            }, 400);
+          } else {
+            setNativeAuthTransition(false);
           }
         };
 
@@ -316,7 +376,7 @@ export function useAuth() {
           const launch = await CapApp.getLaunchUrl();
           if (launch?.url) {
             await handleAuthUrl(launch.url);
-            if (handledAuthRef.current || isLoggingOutRef.current) return;
+            if (handledAuthRef.current) return;
           }
         } catch {}
 
@@ -325,12 +385,9 @@ export function useAuth() {
           await handleAuthUrl(event?.url || "");
         });
 
-        // Only auto-open login if we aren't mid-logout
-        if (!isLoggingOutRef.current) {
-          await Browser.open({ url: loginUrl });
-        } else {
-          setLoading(false);
-        }
+        // ✅ Auto-open login once (guarded)
+        setNativeAuthTransition(true);
+        await openHostedUiNative(loginUrl);
         return;
       }
 
@@ -341,6 +398,7 @@ export function useAuth() {
     ensureAuthenticated().catch((e) => {
       console.error("Auth guard error", e);
       setLoading(false);
+      setNativeAuthTransition(false);
     });
 
     return () => {
@@ -348,9 +406,9 @@ export function useAuth() {
         sub?.remove?.();
       } catch {}
     };
-  }, [applyToken, clearAuthState, loadValidStoredToken]);
+  }, [applyToken, clearAuthState, loadValidStoredToken, openHostedUiNative]);
 
-  // Foreground re-validate (native)
+  // Re-validate on foreground (native)
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
 
@@ -362,7 +420,9 @@ export function useAuth() {
       if (cancelled || !CapApp?.addListener) return;
 
       sub = CapApp.addListener("appStateChange", (state) => {
-        if (state?.isActive) loadValidStoredToken();
+        if (state?.isActive) {
+          loadValidStoredToken();
+        }
       });
     })().catch(() => {});
 
@@ -378,29 +438,24 @@ export function useAuth() {
     // mark logging out
     isLoggingOutRef.current = true;
     setIsLoggingOut(true);
+    setNativeAuthTransition(true);
 
-    if (!Capacitor.isNativePlatform()) {
-      markRecentLogout();
-    }
+    // Web needs persistence across the Cognito redirect
+    if (!Capacitor.isNativePlatform()) markRecentLogout();
 
     const logoutUrl = buildLogoutUrl();
 
-    // clear local state immediately (so the app UI updates right away)
+    // clear local state immediately
     handledAuthRef.current = false;
     clearAuthState();
 
     if (Capacitor.isNativePlatform()) {
-      const Browser = await getCapBrowser();
-      if (!Browser?.open) {
-        console.error("[auth] Browser plugin not available on native.");
-        return;
-      }
-      await Browser.open({ url: logoutUrl });
+      await openHostedUiNative(logoutUrl);
       return;
     }
 
     window.location.replace(logoutUrl);
-  }, [clearAuthState]);
+  }, [clearAuthState, openHostedUiNative]);
 
   let normalizedUser = null;
   if (user) {
@@ -435,6 +490,7 @@ export function useAuth() {
     isAuthenticated: computedIsAuthenticated,
     login,
     logout,
-    isLoggingOut,
+    isLoggingOut, // web: disables auto-login after logout
+    nativeAuthTransition, // native: show overlay during transitions
   };
 }

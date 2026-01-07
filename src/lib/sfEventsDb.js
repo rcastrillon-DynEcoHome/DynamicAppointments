@@ -9,17 +9,14 @@ function safeRandomUUID() {
   try {
     const c = globalThis?.crypto;
 
-    // Newer browsers
     if (c && typeof c.randomUUID === "function") {
       return c.randomUUID();
     }
 
-    // RFC4122 v4 fallback using getRandomValues
     if (c && typeof c.getRandomValues === "function") {
       const buf = new Uint8Array(16);
       c.getRandomValues(buf);
 
-      // RFC4122 version 4
       buf[6] = (buf[6] & 0x0f) | 0x40;
       buf[8] = (buf[8] & 0x3f) | 0x80;
 
@@ -38,7 +35,6 @@ function safeRandomUUID() {
     }
   } catch {}
 
-  // Last resort (not cryptographically strong, but stable enough for local IDs)
   return (
     "id-" +
     Date.now().toString(36) +
@@ -56,23 +52,15 @@ function openDb() {
 
     req.onupgradeneeded = () => {
       const db = req.result;
-      // Create store if missing
       if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, {
-          keyPath: "id",
-        });
+        const store = db.createObjectStore(STORE_NAME, { keyPath: "id" });
         store.createIndex("status", "status", { unique: false });
         store.createIndex("createdAt", "createdAt", { unique: false });
       }
     };
 
-    req.onsuccess = () => {
-      resolve(req.result);
-    };
-
-    req.onerror = () => {
-      reject(req.error || new Error("Failed to open sfEvents DB"));
-    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error("Failed to open sfEvents DB"));
   });
 }
 
@@ -80,11 +68,10 @@ function resetDb() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.deleteDatabase(DB_NAME);
     req.onsuccess = () => resolve();
-    req.onerror = () =>
-      reject(req.error || new Error("Failed to delete sfEvents DB"));
+    req.onerror = () => reject(req.error || new Error("Failed to delete sfEvents DB"));
     req.onblocked = () => {
       console.warn("sfEvents DB delete blocked; may require page reload.");
-      resolve(); // don't hard-fail
+      resolve();
     };
   });
 }
@@ -110,10 +97,7 @@ async function withStore(mode, fn) {
     return result;
   } catch (err) {
     if (err && err.name === "NotFoundError") {
-      // Store missing in an old DB version → reset and retry once
-      console.warn(
-        "[sfEventsDb] Store missing; resetting sf-events DB and recreating."
-      );
+      console.warn("[sfEventsDb] Store missing; resetting sf-events DB and recreating.");
       db.close();
       await resetDb();
       db = await openDb();
@@ -138,8 +122,6 @@ async function withStore(mode, fn) {
 // --- Public API ---
 
 export async function queueSfEvent(event) {
-  // event: { appointmentId, eventType, statusValue, occurredAt, ... }
-
   const id = safeRandomUUID();
 
   const record = {
@@ -163,7 +145,6 @@ export async function getPendingSfEvents() {
       const request = index.getAll("PENDING");
       request.onsuccess = () => {
         const results = request.result || [];
-        // Sort oldest → newest for nicer processing order
         results.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
         resolve(results);
       };
@@ -179,11 +160,45 @@ export async function markSfEventCompleted(id) {
       const getReq = store.get(id);
       getReq.onsuccess = () => {
         const rec = getReq.result;
-        if (!rec) {
-          resolve();
-          return;
-        }
+        if (!rec) return resolve();
         rec.status = "COMPLETED";
+        rec.completedAt = new Date().toISOString();
+        store.put(rec);
+        resolve();
+      };
+      getReq.onerror = () =>
+        reject(getReq.error || new Error("Failed to read SF event"));
+    });
+  });
+}
+
+/**
+ * NEW: Hard delete (best for permanently bad events that will never succeed).
+ */
+export async function deleteSfEvent(id) {
+  return withStore("readwrite", (store) => {
+    return new Promise((resolve, reject) => {
+      const req = store.delete(id);
+      req.onsuccess = () => resolve();
+      req.onerror = () =>
+        reject(req.error || new Error("Failed to delete SF event"));
+    });
+  });
+}
+
+/**
+ * Optional: mark as FAILED (kept in DB, but not pending).
+ */
+export async function markSfEventFailed(id, error) {
+  return withStore("readwrite", (store) => {
+    return new Promise((resolve, reject) => {
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const rec = getReq.result;
+        if (!rec) return resolve();
+        rec.status = "FAILED";
+        rec.failedAt = new Date().toISOString();
+        rec.lastError = error ? JSON.stringify(error).slice(0, 2000) : "";
         store.put(rec);
         resolve();
       };
@@ -197,4 +212,18 @@ export async function clearAllSfEvents() {
   return withStore("readwrite", (store) => {
     store.clear();
   });
+}
+
+/**
+ * NEW: wipe only pending items (nice “Reset queue” button behavior).
+ */
+export async function clearPendingSfEvents() {
+  const pending = await getPendingSfEvents();
+  for (const evt of pending) {
+    try {
+      await deleteSfEvent(evt.id);
+    } catch (e) {
+      console.warn("[sfEventsDb] Failed deleting pending event", evt?.id, e);
+    }
+  }
 }

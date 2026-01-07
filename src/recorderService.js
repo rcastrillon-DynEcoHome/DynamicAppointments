@@ -157,6 +157,9 @@ async function startAndroidForegroundService() {
     id: 1001,
     title: "Recording in progress",
     body: "Audio recording is running. Tap to return to the app.",
+	smallIcon: "ic_stat_recording",
+	// optional but nice:
+	notificationChannelId: "default",
   });
 }
 

@@ -79,6 +79,53 @@ body {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
 }
 
+/* Make header actions area match header height */
+.c-header__actions {
+  position: relative;
+  display: flex;
+  align-items: stretch; /* key: lets the button fill height */
+  height: 100%;
+}
+
+/* Square hamburger button that visually becomes the right edge of the header */
+.c-header__menu-btn {
+  height: 100%;
+  aspect-ratio: 1 / 1;          /* keeps it square */
+  min-width: 56px;              /* good tap target */
+  border: 0;
+  border-left: 1px solid rgba(0,0,0,0.08); /* subtle divider */
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 0;             /* seamless with header */
+  padding: 0;
+}
+
+/* Hover/active states */
+.c-header__menu-btn:hover {
+  background: rgba(0,0,0,0.04);
+}
+.c-header__menu-btn:active {
+  background: rgba(0,0,0,0.08);
+}
+
+/* Icon sizing */
+.c-header__menu-icon {
+  display: block;
+}
+
+/* Ensure the menu drops from the top-right under the header button */
+#settingsMenu.c-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 6px;
+  z-index: 1000;
+}
+
+
 /* Recording status banner */
 .c-recording-banner {
   padding: 0.35rem 1.5rem;

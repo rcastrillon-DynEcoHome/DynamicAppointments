@@ -1,5 +1,5 @@
 // src/hooks/useAuth.js
-console.log("[AUTH BUILD]", "2025-12-19T-native-single-browser-open");
+console.log("[AUTH BUILD]", "2026-01-06T-dual-native-redirect-ios-android");
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Capacitor } from "@capacitor/core";
@@ -13,7 +13,19 @@ const OAUTH_SCOPE = "email openid profile";
 const OAUTH_RESPONSE_TYPE = "token";
 const SALESFORCE_IDP_NAME = "Salesforce";
 
-const NATIVE_REDIRECT_URI = "dynappointments://auth";
+/**
+ * ✅ Dual native redirect support:
+ * - iOS (existing working): dynappointments://auth
+ * - Android (matches appId intent-filter): com.dynamicecohome.dynappointments://callback
+ *
+ * Make sure BOTH are added to Cognito App Client "Callback URL(s)".
+ * AndroidManifest must include the intent-filter for:
+ *   scheme="com.dynamicecohome.dynappointments" host="callback"
+ */
+const IOS_REDIRECT_URI = "dynappointments://auth";
+const ANDROID_REDIRECT_URI = "dynappointments://auth";
+
+// Web Hosted UI callback stays as your origin
 const WEB_REDIRECT_URI = window.location.origin + "/";
 
 const TOKEN_KEY = "fsr_id_token";
@@ -44,6 +56,18 @@ function hasRecentLogout() {
   } catch {
     return false;
   }
+}
+
+function getNativeRedirectUri() {
+  const p = Capacitor.getPlatform(); // 'ios' | 'android' | 'web'
+  return p === "android" ? ANDROID_REDIRECT_URI : IOS_REDIRECT_URI;
+}
+
+function isAnyNativeRedirect(url) {
+  return (
+    typeof url === "string" &&
+    (url.startsWith(IOS_REDIRECT_URI) || url.startsWith(ANDROID_REDIRECT_URI))
+  );
 }
 
 /**
@@ -86,7 +110,7 @@ async function getCapApp() {
 }
 
 function getRedirectUri() {
-  return Capacitor.isNativePlatform() ? NATIVE_REDIRECT_URI : WEB_REDIRECT_URI;
+  return Capacitor.isNativePlatform() ? getNativeRedirectUri() : WEB_REDIRECT_URI;
 }
 
 function parseHashFragmentFromUrl(urlString) {
@@ -152,7 +176,7 @@ export function useAuth() {
   const isLoggingOutRef = useRef(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  // ✅ iOS: prevent Browser.open from being called twice (this is the root of your flicker)
+  // ✅ Prevent Browser.open from being called twice
   const browserOpenInFlightRef = useRef(false);
 
   // Optional: drive an overlay in App during native transitions (logout->login)
@@ -206,34 +230,30 @@ export function useAuth() {
   }, [clearAuthState]);
 
   // ✅ Single authority opener for native
-  const openHostedUiNative = useCallback(
-    async (url) => {
-      if (!Capacitor.isNativePlatform()) return;
+  const openHostedUiNative = useCallback(async (url) => {
+    if (!Capacitor.isNativePlatform()) return;
 
-      // Hard guard: if already opening/presented, do nothing.
-      if (browserOpenInFlightRef.current) return;
+    // Hard guard: if already opening/presented, do nothing.
+    if (browserOpenInFlightRef.current) return;
 
-      const Browser = await getCapBrowser();
-      if (!Browser?.open) {
-        console.error("[auth] Browser plugin not available on native.");
-        return;
-      }
+    const Browser = await getCapBrowser();
+    if (!Browser?.open) {
+      console.error("[auth] Browser plugin not available on native.");
+      return;
+    }
 
-      browserOpenInFlightRef.current = true;
-      try {
-        await Browser.open({ url });
-      } catch (e) {
-        // This is your "Unable to display URL" case
-        console.error("[auth] Browser.open failed:", e);
-      } finally {
-        // Release in-flight guard slightly later so iOS has time to settle
-        setTimeout(() => {
-          browserOpenInFlightRef.current = false;
-        }, 350);
-      }
-    },
-    []
-  );
+    browserOpenInFlightRef.current = true;
+    try {
+      await Browser.open({ url });
+    } catch (e) {
+      console.error("[auth] Browser.open failed:", e);
+    } finally {
+      // Release slightly later so native UI has time to settle
+      setTimeout(() => {
+        browserOpenInFlightRef.current = false;
+      }, 350);
+    }
+  }, []);
 
   const login = useCallback(
     async ({ authMode } = {}) => {
@@ -258,7 +278,7 @@ export function useAuth() {
 
       if (Capacitor.isNativePlatform()) {
         await openHostedUiNative(loginUrl);
-        // Do NOT setLoading(false) here; we’ll resolve on callback
+        // Resolve on callback
         return;
       }
 
@@ -294,7 +314,7 @@ export function useAuth() {
         return;
       }
 
-      // 4) Start auth flow (AUTO) — but only from here (App.jsx will NOT auto-login on native)
+      // 4) Start auth flow (AUTO)
       const params = new URLSearchParams(window.location.search);
       const authMode = params.get("authMode") || "";
       lastAuthModeRef.current = authMode;
@@ -321,7 +341,9 @@ export function useAuth() {
 
         const handleAuthUrl = async (url) => {
           if (!url) return;
-          if (!url.startsWith(NATIVE_REDIRECT_URI)) return;
+
+          // ✅ Accept either iOS or Android callback
+          if (!isAnyNativeRedirect(url)) return;
 
           const cb = parseHashFragmentFromUrl(url);
 
@@ -350,13 +372,11 @@ export function useAuth() {
           handledAuthRef.current = false;
 
           // If we were logging out, immediately go back to login Hosted UI
-          // (prevents blank “in-between” state)
           if (isLoggingOutRef.current) {
             isLoggingOutRef.current = false;
             setIsLoggingOut(false);
             setNativeAuthTransition(true);
 
-            // Small delay to allow iOS to finish dismissing SafariVC
             const mode = lastAuthModeRef.current || "";
             const nextLoginUrl =
               mode === "sf"
@@ -494,3 +514,4 @@ export function useAuth() {
     nativeAuthTransition, // native: show overlay during transitions
   };
 }
+

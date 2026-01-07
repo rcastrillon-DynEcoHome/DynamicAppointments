@@ -166,6 +166,9 @@ function App() {
   const [audioUrl, setAudioUrl] = useState(null);
   const [selectedRecording, setSelectedRecording] = useState(null);
 
+  // NEW: allow App to force-stop/scrap before cache clear
+  const newRecordingRef = useRef(null);
+
   const hardResetAudio = () => {
     const a = audioRef.current;
     if (!a) return;
@@ -359,6 +362,19 @@ function App() {
 
   const handleClearCache = async () => {
     setSettingsOpen(false);
+
+    // ✅ Stop + scrap active recording before cache clear (prevents native service continuing)
+    try {
+      if (newRecordingRef.current?.isRecording?.()) {
+        setStatusText("Stopping active recording before clearing cache…");
+        await newRecordingRef.current.forceStopAndScrap(
+          "Recording stopped (cache clear)."
+        );
+      }
+    } catch (e) {
+      console.warn("Failed to stop recording before cache clear", e);
+    }
+
     await clearAppCacheAndReload();
   };
 
@@ -489,31 +505,68 @@ function App() {
 
   const playerSpeedText = `${playerSpeed.toFixed(2).replace(/\.00$/, "")}x`;
 
-  const handleMarkStartInSalesforce = async () => {
-    if (!appointmentId) {
+  // ✅ FIXED: show real success/failure based on syncPending() response
+  const handleMarkStartInSalesforce = async (apptIdFromPanel) => {
+    const apptToUse = (apptIdFromPanel || appointmentId || "").trim();
+
+    if (!apptToUse) {
       setStatusText(
         "Set an Appointment ID before starting so the status update can be sent to Salesforce."
       );
       return;
     }
 
+    const occurredAt = new Date().toISOString();
+
     try {
-      setStatusText("Sending Salesforce status update (START)…");
+      // ✅ Queue + auto-sync ONCE, and use the sync result from that same run.
+      const { syncRes } = await queueSfEvent(
+        {
+          appointmentId: apptToUse,
+          eventType: "START",
+          statusValue: "In Progress",
+          occurredAt,
+        },
+        { autoSync: true }
+      );
 
-      await queueSfEvent({
-        appointmentId,
-        eventType: "START",
-        statusValue: "In Progress",
-        occurredAt: new Date().toISOString(),
-      });
+      // If we didn’t sync (offline / token missing), tell truth and stop.
+      if (!navigator.onLine) {
+        setStatusText(
+          `Queued Salesforce START for '${apptToUse}' (offline). It will send when you're online.`
+        );
+        return;
+      }
+      if (!idToken) {
+        setStatusText(
+          `Queued Salesforce START for '${apptToUse}', but cannot send yet (missing auth token). It will retry automatically.`
+        );
+        return;
+      }
 
-      if (navigator.onLine) await syncSfPending();
-      setStatusText("Salesforce status update sent.");
+      // We DID attempt a sync; evaluate outcome from that sync.
+      const key = `${apptToUse}::START`;
+      const outcome = syncRes?.resultsByApptEvent?.[key];
+
+      if (outcome) {
+        if (outcome.ok) {
+          setStatusText(`Salesforce status update sent for '${apptToUse}'.`);
+        } else {
+          setStatusText(
+            `Salesforce update failed for '${apptToUse}': ${outcome.errorMessage || "Unknown error"}`
+          );
+        }
+        return;
+      }
+
+      // If the lambda didn’t return a matching result, be honest.
+      setStatusText(
+        `Queued Salesforce START for '${apptToUse}', but no matching result was returned. It will retry automatically.`
+      );
     } catch (e) {
       console.warn("[SF START] failed", e);
       setStatusText(
-        "Salesforce status update failed (will retry when you sync / go online): " +
-          (e?.message || String(e))
+        `Salesforce update failed for '${apptToUse}': ${e?.message || String(e)}`
       );
     }
   };
@@ -543,8 +596,6 @@ function App() {
   }
 
   if (!isAuthenticated) {
-    // ✅ On native: do NOT auto-call login from SignInRedirect
-    // useAuth is the only code that opens Browser.open (prevents double-open flicker).
     const disableAutoLogin = Capacitor.isNativePlatform()
       ? true
       : isLoggingOut;
@@ -570,7 +621,11 @@ function App() {
           <Header
             userDisplay={userDisplay}
             appointmentDisplay={""}
-            onSettingsClick={() => setSettingsOpen((open) => !open)}
+            onSettingsClick={(val) =>
+			  typeof val === "boolean"
+				? setSettingsOpen(val)
+				: setSettingsOpen((open) => !open)
+			}
             isSettingsOpen={settingsOpen}
             onSyncRecordings={handleSyncRecordings}
             onClearCache={handleClearCache}
@@ -583,6 +638,7 @@ function App() {
           <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
 
           <NewRecordingPanel
+            ref={newRecordingRef}
             isActive={activeTab === "new"}
             appointmentDisplayText={appointmentDisplayText}
             onAppointmentClick={handleAppointmentClick}

@@ -1,20 +1,30 @@
-import React, { useEffect, useRef, useState } from "react";
+// src/components/NewRecordingPanel.jsx
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useImperativeHandle,
+  forwardRef,
+} from "react";
 import { createNativeRecorder, isNative } from "../recorderService";
 
-function NewRecordingPanel({
-  isActive,
-  appointmentDisplayText,
-  onAppointmentClick,
-  statusText,
-  onStatusChange,
-  onBannerChange,
-  appointmentId,
-  onSaveRecording,
-  onSaved,
-  onMarkStart, // optional SF hook
-  onAfterSave, // ✅ deep link hook (replaces onMarkSave)
-  onPreviewRecording, // required for shared footer player
-}) {
+const NewRecordingPanel = forwardRef(function NewRecordingPanel(
+  {
+    isActive,
+    appointmentDisplayText,
+    onAppointmentClick,
+    statusText,
+    onStatusChange,
+    onBannerChange,
+    appointmentId,
+    onSaveRecording,
+    onSaved,
+    onMarkStart, // <-- called RIGHT HERE on Start (best-effort)
+    onAfterSave,
+    onPreviewRecording,
+  },
+  ref
+) {
   const [isSupported, setIsSupported] = useState(true);
   const [recorderState, setRecorderState] = useState("inactive");
   // "inactive" | "recording" | "paused" | "file"
@@ -73,8 +83,10 @@ function NewRecordingPanel({
     const chunks = audioChunksRef.current || [];
     let blob = null;
 
-    // Web: can preview paused state via chunks; Native: we only reliably preview after stop
-    if (!useNative && (recorderState === "recording" || recorderState === "paused")) {
+    if (
+      !useNative &&
+      (recorderState === "recording" || recorderState === "paused")
+    ) {
       if (!chunks.length) {
         blob = audioBlob || null;
       } else {
@@ -135,7 +147,9 @@ function NewRecordingPanel({
 
     setRecordingMimeType(mimeType || "");
 
-    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    const recorder = mimeType
+      ? new MediaRecorder(stream, { mimeType })
+      : new MediaRecorder(stream);
 
     recorder.ondataavailable = (e) => {
       if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
@@ -151,30 +165,11 @@ function NewRecordingPanel({
       setRecorderState("inactive");
 
       if (wasScrapping) {
-        // full reset
-        setAudioBlob(null);
-        setSaveDisabled(true);
-        setStartDisabled(false);
-        setPauseDisabled(true);
-        setResumeDisabled(true);
-        setStopDisabled(true);
-        setScrapDisabled(true);
-        setPreviewDisabled(true);
-        onStatusChange?.("Recording discarded.");
-        onBannerChange?.("hidden");
+        resetUiAfterDiscard("Recording discarded.");
       } else {
         if (!chunks.length) {
           console.warn("No audio chunks collected on stop.");
-          setAudioBlob(null);
-          setSaveDisabled(true);
-          setStartDisabled(false);
-          setPauseDisabled(true);
-          setResumeDisabled(true);
-          setStopDisabled(true);
-          setScrapDisabled(true);
-          setPreviewDisabled(true);
-          onStatusChange?.("No audio captured. Please try recording again.");
-          onBannerChange?.("hidden");
+          resetUiAfterDiscard("No audio captured. Please try recording again.");
         } else {
           const type = recordingMimeType || "audio/mp4";
           const blob = new Blob(chunks, { type });
@@ -222,6 +217,61 @@ function NewRecordingPanel({
     onBannerChange?.("hidden");
   }
 
+  // ----- FORCE STOP + SCRAP (no confirm) -----
+  async function forceStopAndScrap(reason = "Recording stopped (cache clear).") {
+    try {
+      // Native
+      if (useNative) {
+        try {
+          if (!nativeRecorderRef.current) {
+            nativeRecorderRef.current = createNativeRecorder();
+            await nativeRecorderRef.current.init();
+          }
+
+          if (recorderState === "recording" || recorderState === "paused") {
+            if (typeof nativeRecorderRef.current.cancel === "function") {
+              await nativeRecorderRef.current.cancel();
+            } else {
+              try {
+                await nativeRecorderRef.current.stop();
+              } catch {}
+            }
+          }
+        } catch (e) {
+          console.warn("[NewRecordingPanel] forceStopAndScrap (native) failed:", e);
+        } finally {
+          setIsScrapping(false);
+          isScrappingRef.current = false;
+          resetUiAfterDiscard(reason);
+        }
+        return;
+      }
+
+      // Web
+      const recorder = mediaRecorderRef.current;
+      const state = recorder ? recorder.state : "inactive";
+
+      if (recorder && (state === "recording" || state === "paused")) {
+        isScrappingRef.current = true;
+        setIsScrapping(true);
+        try {
+          recorder.stop();
+        } catch {}
+      }
+
+      resetUiAfterDiscard(reason);
+    } catch (e) {
+      console.warn("[NewRecordingPanel] forceStopAndScrap error:", e);
+      resetUiAfterDiscard(reason);
+    }
+  }
+
+  // Expose imperative API to App.jsx
+  useImperativeHandle(ref, () => ({
+    forceStopAndScrap,
+    isRecording: () => recorderState === "recording" || recorderState === "paused",
+  }));
+
   // ----- SCRAP -----
   async function handleScrap() {
     if (scrapDisabled) return;
@@ -230,7 +280,6 @@ function NewRecordingPanel({
     const hasChunks = (audioChunksRef.current?.length || 0) > 0;
 
     if (useNative) {
-      // Native discard: cancel if available, otherwise just reset UI
       const confirmed = window.confirm(
         "This will permanently delete this recording in progress. This action cannot be undone. Continue?"
       );
@@ -243,12 +292,9 @@ function NewRecordingPanel({
           if (typeof nativeRecorderRef.current.cancel === "function") {
             await nativeRecorderRef.current.cancel();
           } else {
-            // fallback: attempt stop, then discard
             try {
               await nativeRecorderRef.current.stop();
-            } catch (_) {
-              // ignore
-            }
+            } catch {}
           }
         }
       } catch (e) {
@@ -260,7 +306,6 @@ function NewRecordingPanel({
       return;
     }
 
-    // Web discard (your existing behavior)
     const recorder = mediaRecorderRef.current;
     const state = recorder ? recorder.state : "inactive";
 
@@ -295,6 +340,8 @@ function NewRecordingPanel({
   // ----- RECORDING CONTROLS -----
   async function handleStart() {
     try {
+      console.log("[NewRecordingPanel] START clicked. appointmentId =", appointmentId || "");
+
       if (!isSupported) {
         onStatusChange?.(
           "Recording is not supported on this browser. You can still upload audio files."
@@ -302,20 +349,21 @@ function NewRecordingPanel({
         return;
       }
 
+      // Clear current buffers
       audioChunksRef.current = [];
       setAudioBlob(null);
       isScrappingRef.current = false;
       setIsScrapping(false);
 
+      // Start recorder first (so UX doesn't depend on SF)
       if (useNative) {
         if (!nativeRecorderRef.current) {
           nativeRecorderRef.current = createNativeRecorder();
           await nativeRecorderRef.current.init();
         }
         await nativeRecorderRef.current.start();
-
         setRecorderState("recording");
-        setRecordingMimeType("audio/aac"); // safe default; stop() may return a better one
+        setRecordingMimeType("audio/aac");
       } else {
         if (!mediaRecorderRef.current) await initMedia();
         mediaRecorderRef.current.start(1000);
@@ -333,16 +381,23 @@ function NewRecordingPanel({
       setScrapDisabled(false);
       setPreviewDisabled(true);
 
-      if (onMarkStart && appointmentId) {
+      // ✅ EXACTLY HERE: queue SF START event (best-effort)
+      if (!appointmentId) {
+        console.warn("[NewRecordingPanel] Start: no appointmentId, cannot mark START.");
+      } else if (typeof onMarkStart === "function") {
         try {
-          await onMarkStart();
+          console.log("[NewRecordingPanel] Calling onMarkStart with", appointmentId);
+          await onMarkStart(appointmentId);
+          console.log("[NewRecordingPanel] onMarkStart completed");
         } catch (e) {
-          console.warn("Failed to queue SF START event", e);
+          console.warn("[NewRecordingPanel] onMarkStart failed:", e);
         }
+      } else {
+        console.warn("[NewRecordingPanel] onMarkStart prop is not a function");
       }
     } catch (err) {
       console.error("Error starting recording", err);
-      onStatusChange?.("Error starting recording: " + err.message);
+      onStatusChange?.("Error starting recording: " + (err?.message || String(err)));
       onBannerChange?.("hidden");
     }
   }
@@ -356,7 +411,7 @@ function NewRecordingPanel({
         onBannerChange?.("paused");
         setPauseDisabled(true);
         setResumeDisabled(false);
-        setPreviewDisabled(true); // native preview mid-record not reliable
+        setPreviewDisabled(true);
         return;
       }
 
@@ -443,7 +498,7 @@ function NewRecordingPanel({
       }
     } catch (err) {
       console.error(err);
-      onStatusChange?.("Error stopping recording: " + err.message);
+      onStatusChange?.("Error stopping recording: " + (err?.message || String(err)));
       onBannerChange?.("hidden");
     }
   }
@@ -483,13 +538,11 @@ function NewRecordingPanel({
   async function handlePreview() {
     if (previewDisabled) return;
 
-    // Native: only preview after stop/file (audioBlob exists)
     if (useNative && !audioBlob) {
       onStatusChange?.("Stop the recording before previewing on mobile.");
       return;
     }
 
-    // Web: block preview while actively recording
     if (!useNative) {
       const recorder = mediaRecorderRef.current;
       const state = recorder ? recorder.state : "inactive";
@@ -497,14 +550,10 @@ function NewRecordingPanel({
         onStatusChange?.("Pause or stop the recording before previewing.");
         return;
       }
-
-      // If paused, flush buffer so chunks include latest audio
       if (recorder && state === "paused") {
         try {
           recorder.requestData();
-        } catch (e) {
-          console.warn("requestData failed in preview", e);
-        }
+        } catch {}
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
     }
@@ -515,12 +564,8 @@ function NewRecordingPanel({
       return;
     }
 
-    if (onPreviewRecording) {
-      onPreviewRecording(item);
-      onStatusChange?.("Previewing current recording (not yet saved).");
-    } else {
-      onStatusChange?.("Preview player not available. (Missing onPreviewRecording handler.)");
-    }
+    onPreviewRecording?.(item);
+    onStatusChange?.("Previewing current recording (not yet saved).");
   }
 
   // ----- SAVE -----
@@ -542,7 +587,6 @@ function NewRecordingPanel({
       durationSeconds,
     });
 
-    // ✅ NEW behavior: deep-link back to Field Service (or whatever handler App.jsx provides)
     if (onAfterSave && savedRecord) {
       try {
         await onAfterSave(savedRecord);
@@ -592,7 +636,9 @@ function NewRecordingPanel({
         {appointmentDisplayText}
       </div>
 
-      <p id="status" className="c-text-muted">{statusText}</p>
+      <p id="status" className="c-text-muted">
+        {statusText}
+      </p>
 
       <div className="c-button-row">
         <button
@@ -683,11 +729,12 @@ function NewRecordingPanel({
       </div>
 
       <p className="c-text-small">
-        This app works offline. Recordings are saved on your device and uploaded when you are online.
-        You can also load an existing audio file and tag it to an appointment.
+        This app works offline. Recordings are saved on your device and uploaded
+        when you are online. You can also load an existing audio file and tag it
+        to an appointment.
       </p>
     </section>
   );
-}
+});
 
 export default NewRecordingPanel;
